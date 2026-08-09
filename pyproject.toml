@@ -1,0 +1,45 @@
+[project]
+name = "real-modelize-agent"
+version = "0.1.0"
+description = "数学建模 Code Agent：建模手→编程手→论文手 端到端生成 CUMCM LaTeX 论文"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.2.15",
+    "langchain-openai>=1.1.13",
+    "langgraph>=1.1.6",
+    "python-dotenv>=1.1.1",
+    "rich>=13.7.1",
+    "tavily-python>=0.7.24",
+    "textual>=8.2.4",
+    "typer>=0.16.0",
+    "pillow>=11.0.0",
+]
+
+[project.optional-dependencies]
+modeling = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "matplotlib>=3.8",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+    "statsmodels>=0.14",
+    "openpyxl>=3.1",
+    "seaborn>=0.13",
+]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+real-modelize = "real_modelize_agent.cli.app:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/real_modelize_agent"]
+
+[tool.pytest.ini_options]
+addopts = "-p no:launch_testing -p no:launch_ros"
+testpaths = ["tests"]
+markers = ["compile: run real pdflatex compilation (slow)"]
