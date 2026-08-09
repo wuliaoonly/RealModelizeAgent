@@ -174,6 +174,9 @@ def _safe_argv(state: RuntimeState, command: str) -> tuple[list[str] | None, str
     if executable in {"python", "python.exe"}:
         if any(arg in {"-c", "-m", "-"} for arg in argv[1:]):
             return None, "python -c/-m/stdin execution is not allowed; run a workspace .py entrypoint"
+        unsupported_flags = [arg for arg in argv[1:] if arg.startswith("-") and arg != "--version"]
+        if unsupported_flags:
+            return None, f"python interpreter flags are not allowed: {', '.join(unsupported_flags)}"
         non_flags = [arg for arg in argv[1:] if not arg.startswith("-")]
         if non_flags and non_flags[0] not in {"--version"}:
             script = Path(non_flags[0])
@@ -252,6 +255,8 @@ def run_bash(
     env, env_error = _build_env(state)
     if env_error is not None:
         return {"ok": False, "error": env_error}
+    if Path(argv[0]).name.lower() in {"python", "python.exe"} and "--version" not in argv:
+        _apply_python_guard_environment(state, env)
     max_output_chars = _state_int(state, "bash_max_output_chars", DEFAULT_MAX_OUTPUT_CHARS)
     try:
         completed = subprocess.run(
@@ -319,6 +324,97 @@ def _persist_python_execution_record(
     }
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record_path.relative_to(state.workspace).as_posix()
+
+
+def _apply_python_guard_environment(state: RuntimeState, env: dict[str, str]) -> None:
+    """Install a defense-in-depth guard for ordinary Python file/process/network APIs."""
+    guard_dir = state.workspace / ".real-modelize" / "python-guard"
+    temp_dir = state.workspace / ".real-modelize" / "tmp"
+    guard_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    guard = guard_dir / "sitecustomize.py"
+    if not guard.exists() or guard.read_text(encoding="utf-8", errors="replace") != _PYTHON_GUARD_SOURCE:
+        guard.write_text(_PYTHON_GUARD_SOURCE, encoding="utf-8")
+    previous = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(guard_dir) + (os.pathsep + previous if previous else "")
+    env["RMA_WORKSPACE_ROOT"] = str(state.workspace.resolve())
+    env["TMP"] = str(temp_dir)
+    env["TEMP"] = str(temp_dir)
+    env["TMPDIR"] = str(temp_dir)
+    env["MPLCONFIGDIR"] = str(state.workspace / ".real-modelize" / "matplotlib")
+
+
+_PYTHON_GUARD_SOURCE = r'''"""Runtime guard injected by RealModelizeAgent. Not a replacement for OS sandboxing."""
+import builtins
+import io
+import os
+import pathlib
+import socket
+import subprocess
+
+_ROOT = pathlib.Path(os.environ["RMA_WORKSPACE_ROOT"]).resolve()
+
+def _inside(value):
+    path = pathlib.Path(value).expanduser().resolve()
+    return path == _ROOT or _ROOT in path.parents
+
+def _require_write_path(value):
+    if isinstance(value, int):
+        return
+    if not _inside(value):
+        raise PermissionError(f"RealModelizeAgent blocked write outside workspace: {value}")
+
+_open = builtins.open
+def guarded_open(file, mode="r", *args, **kwargs):
+    if any(flag in mode for flag in "wax+"):
+        _require_write_path(file)
+    return _open(file, mode, *args, **kwargs)
+builtins.open = guarded_open
+io.open = guarded_open
+
+_os_open = os.open
+def guarded_os_open(path, flags, *args, **kwargs):
+    write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+    if flags & write_flags:
+        _require_write_path(path)
+    return _os_open(path, flags, *args, **kwargs)
+os.open = guarded_os_open
+
+_mkdir = os.mkdir
+def guarded_mkdir(path, *args, **kwargs):
+    _require_write_path(path)
+    return _mkdir(path, *args, **kwargs)
+os.mkdir = guarded_mkdir
+
+_remove = os.remove
+def guarded_remove(path, *args, **kwargs):
+    _require_write_path(path)
+    return _remove(path, *args, **kwargs)
+os.remove = guarded_remove
+os.unlink = guarded_remove
+
+_rename = os.rename
+def guarded_rename(src, dst, *args, **kwargs):
+    _require_write_path(src)
+    _require_write_path(dst)
+    return _rename(src, dst, *args, **kwargs)
+os.rename = guarded_rename
+os.replace = guarded_rename
+
+def _blocked(*args, **kwargs):
+    raise PermissionError("RealModelizeAgent blocked child process or network access")
+
+subprocess.Popen = _blocked
+subprocess.run = _blocked
+subprocess.call = _blocked
+subprocess.check_call = _blocked
+subprocess.check_output = _blocked
+os.system = _blocked
+os.popen = _blocked
+socket.create_connection = _blocked
+_socket_connect = socket.socket.connect
+socket.socket.connect = _blocked
+'''
 
 
 def _resolve_approval(state: RuntimeState, command: str) -> dict[str, Any] | None:
