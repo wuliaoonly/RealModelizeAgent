@@ -453,7 +453,14 @@ def snapshot_workspace_git(workspace: Path, root: Path) -> tuple[str | None, str
 
     workspace = workspace.resolve()
     root = root.resolve()
+    expected_root = checkpoint_dir(workspace).resolve()
+    if root != expected_root:
+        return None, f"checkpoint root must be {expected_root}"
     git_dir = root / GIT_DIR
+    if git_dir.is_dir() and _checkpoint_history_has_excluded_paths(workspace, git_dir):
+        # Security migration: exclusions do not erase already committed blobs.
+        # Reinitialize only the private checkpoint repository, never workspace files.
+        shutil.rmtree(git_dir)
     git_dir.mkdir(parents=True, exist_ok=True)
     try:
         _git(workspace, git_dir, ["init", "-q"])
@@ -631,3 +638,22 @@ def _purge_excluded_git_paths(workspace: Path, git_dir: Path) -> None:
                 text=True,
                 capture_output=True,
             )
+
+
+def _checkpoint_history_has_excluded_paths(workspace: Path, git_dir: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", f"--git-dir={git_dir}", f"--work-tree={workspace}", "log", "--all", "--name-only", "--pretty=format:"],
+            cwd=workspace,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return False
+    binary_suffixes = {".xlsx", ".xls", ".pdf", ".png", ".jpg", ".jpeg", ".svg"}
+    return any(
+        should_skip_workspace_path(Path(raw.strip())) or Path(raw.strip()).suffix.lower() in binary_suffixes
+        for raw in result.stdout.splitlines()
+        if raw.strip()
+    )
