@@ -22,7 +22,7 @@ def latex_source_fingerprint(workspace: Path, tex_name: str = "论文.tex") -> s
     """Hash every source that can change the rendered paper."""
     workspace = workspace.resolve()
     candidates: set[Path] = set()
-    for pattern in ("*.tex", "sections/*.tex", "*.bib"):
+    for pattern in ("*.tex", "*.bib"):
         candidates.update(path for path in workspace.glob(pattern) if path.is_file())
     tex = workspace / tex_name
     for source in list(candidates):

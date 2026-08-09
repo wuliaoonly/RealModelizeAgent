@@ -66,16 +66,12 @@ DETERMINISTIC_CHECK_NAMES = {"图片引用"}
 
 
 def _paper_reference_checks(workspace) -> tuple[list[str], int]:
-    """确定性核对：论文.tex（含旧式 sections/*.tex）的 \\includegraphics 引用是否全部落在存在文件。
+    """确定性核对：论文.tex 的 \\includegraphics 引用是否全部落在存在文件。
 
     相对工作区根解析路径；正则全 ASCII，文件按 UTF-8 读取，不受 Windows 控制台编码影响。
     """
     refs: list[str] = []
-    tex_files = []
-    sections_dir = workspace / "sections"
-    if sections_dir.is_dir():
-        tex_files.extend(sorted(sections_dir.glob("*.tex")))
-    tex_files.append(workspace / "论文.tex")
+    tex_files = [workspace / "论文.tex"]
     for tex in tex_files:
         if not tex.exists():
             continue

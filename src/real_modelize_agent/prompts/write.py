@@ -1,18 +1,6 @@
 # 论文手提示词 —— CUMCM LaTeX 论文写作
 # 文案改写自 AAAMathmaticalModel/prompt提示词/writer.py，改为 LaTeX 输出
 
-PAPER_TEX_HEADER = r"""% RealModelizeAgent CUMCM 论文模板前导（pdflatex 兼容）
-\documentclass[UTF8,12pt,AutoFakeBold]{article}
-\usepackage[UTF8,fontset=windows]{ctex}
-\usepackage{amsmath,amssymb,bm}
-\usepackage{graphicx,booktabs,array,caption,float,geometry,multirow,tabularx}
-\usepackage[colorlinks=true,linkcolor=black,citecolor=black,urlcolor=cyan]{hyperref}
-\geometry{a4paper,left=3cm,right=3cm,top=2.54cm,bottom=2.54cm}
-\floatplacement{figure}{H}
-\floatplacement{table}{H}
-\captionsetup{font=small,labelfont=bf}
-"""
-
 WRITER_PROMPT = """# Role
 你是一名数学建模竞赛论文写作专家（CUMCM 国赛）。基于建模手（题目分析.md、建模方案.json、每问 problemN/方案/）
 与编程手（problemN/代码/、problemN/图表/、problemN/结果/evidence.json）、

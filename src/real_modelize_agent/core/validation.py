@@ -123,7 +123,7 @@ def _validate_paper(workspace: Path, expected: list[str]) -> dict[str, Any]:
     status = latex_compile_status(workspace)
     tex = workspace / "论文.tex"
     issues: list[str] = []
-    text = tex.read_text(encoding="utf-8", errors="replace") if tex.exists() else ""
+    text = _paper_text(workspace)
     if len(text.strip()) < 1000:
         issues.append("论文.tex 缺失或内容过短")
     if PLACEHOLDER_RE.search(text):
@@ -152,7 +152,7 @@ def _validate_citations(workspace: Path) -> dict[str, Any]:
     tex = workspace / "论文.tex"
     if not tex.exists():
         return _check("参考文献溯源", False, "论文.tex 不存在")
-    text = tex.read_text(encoding="utf-8", errors="replace")
+    text = _paper_text(workspace)
     cited = {key.strip() for group in CITE_RE.findall(text) for key in group.split(",") if key.strip()}
     bib = workspace / "research" / "参考文献.bib"
     bib_text = bib.read_text(encoding="utf-8", errors="replace") if bib.exists() else ""
@@ -291,3 +291,8 @@ def _sha256(path: Path) -> str:
     import hashlib
 
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+def _paper_text(workspace: Path) -> str:
+    tex = workspace / "论文.tex"
+    return tex.read_text(encoding="utf-8", errors="replace") if tex.is_file() else ""

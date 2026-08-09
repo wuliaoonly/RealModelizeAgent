@@ -23,8 +23,6 @@ Writer = Callable[[dict[str, Any]], None]
 
 PAPER_TEX = "论文.tex"
 PAPER_PDF = "论文.pdf"
-HEADER_TEX = "header.tex"
-SECTIONS_DIR = "sections"
 
 
 def build_latex_command(tex_name: str, engine: str = "pdflatex") -> str:
@@ -49,43 +47,6 @@ def parse_latex_errors(log_path: Path, limit: int = 8) -> list[str]:
             if len(errors) >= limit:
                 break
     return errors or ["no '!' error lines found in log"]
-
-
-def assemble_paper(header: str, sections: list[str], footer: str = "") -> str:
-    """拼接论文：前导 + 各章节 + 结尾。"""
-    parts = [header.rstrip()]
-    parts.extend(section.rstrip() for section in sections)
-    if footer.strip():
-        parts.append(footer.strip())
-    return "\n\n".join(parts) + "\n"
-
-
-def assemble_paper_from_files(
-    workspace: Path,
-    *,
-    header_name: str = HEADER_TEX,
-    sections_dir: str = SECTIONS_DIR,
-    output: str = PAPER_TEX,
-) -> dict[str, Any]:
-    """读取 header.tex 与 sections/*.tex 拼成 论文.tex。返回 {ok, path, sections, chars}。"""
-    header_path = workspace / header_name
-    sections_path = workspace / sections_dir
-    if not header_path.exists():
-        return {"ok": False, "error": f"missing header file: {header_name}"}
-    if not sections_path.is_dir():
-        return {"ok": False, "error": f"missing sections dir: {sections_dir}"}
-    header = header_path.read_text(encoding="utf-8", errors="replace")
-    section_files = sorted(sections_path.glob("*.tex"))
-    sections = [path.read_text(encoding="utf-8", errors="replace") for path in section_files]
-    content = assemble_paper(header, sections, footer="\\end{document}")
-    output_path = workspace / output
-    output_path.write_text(content, encoding="utf-8")
-    return {
-        "ok": True,
-        "path": output,
-        "sections": [path.name for path in section_files],
-        "chars": len(content),
-    }
 
 
 def paper_status(workspace: Path) -> dict[str, Any]:
