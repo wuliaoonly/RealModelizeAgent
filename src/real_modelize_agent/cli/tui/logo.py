@@ -6,8 +6,6 @@ from typing import Iterable
 
 from rich.text import Text
 
-from real_modelize_agent.core.paths import find_project_root
-
 
 FALLBACK_LOGO = [
     "  <      >  ",
@@ -18,14 +16,12 @@ FALLBACK_LOGO = [
 ]
 
 
-def default_logo_path() -> Path:
-    return find_project_root() / "assets" / "logo-no-words.png"
-
-
 def render_logo(path: Path | None = None, *, max_width: int = 36, max_rows: int = 12) -> Text:
-    logo_path = path or default_logo_path()
+    """渲染 logo：未提供图片路径或文件不存在 → 使用 ASCII 兜底 logo（不再依赖 assets 目录）。"""
+    if path is None or not Path(path).exists():
+        return _render_fallback_logo()
     try:
-        return _render_png_logo(str(logo_path), max_width=max_width, max_rows=max_rows)
+        return _render_png_logo(str(path), max_width=max_width, max_rows=max_rows)
     except Exception:
         return _render_fallback_logo()
 

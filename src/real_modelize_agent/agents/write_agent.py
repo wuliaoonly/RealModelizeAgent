@@ -109,14 +109,19 @@ def seed_paper_template(workspace: Path, template_dir: Path | None = None) -> di
     """把国赛模板 seed 进工作区：main.tex→论文.tex、references.bib、Pictures/、字体。
 
     **不覆盖保证**：论文.tex 已存在（真实成品/旧工作区）→ 跳过，--resume 安全。
-    模板缺失 → 返回 ok=False（回退旧 header+sections 流程，不抛错）。返回 {ok, reason, files}。
+    **模板强制**：已不再回退旧 header+sections 流程——模板缺失即返回 ok=False，调用方必须中止。
+    返回 {ok, reason, files}。
     """
     tex = workspace / PAPER_TEX
     if tex.exists():
         return {"ok": True, "reason": "论文.tex 已存在，跳过 seed（不覆盖成品）", "files": []}
     template_dir = template_dir if template_dir is not None else resolve_paper_template_dir()
     if template_dir is None or not template_dir.is_dir():
-        return {"ok": False, "reason": "未找到数模论文模板，回退旧流程", "files": []}
+        return {
+            "ok": False,
+            "reason": "未找到数模论文模板，已不再支持回退旧流程：请将国赛模板放入 数模论文模板/ 或设置 RMA_PAPER_TEMPLATE_DIR",
+            "files": [],
+        }
     copied: list[str] = []
     main_tex = template_dir / "main.tex"
     if main_tex.exists():
@@ -176,6 +181,10 @@ def run_writer_agent(
     )
 
     seed_info = seed_paper_template(runtime.workspace)
+    if not seed_info.get("ok"):
+        detail = seed_info.get("reason", "未找到数模论文模板")
+        writer({"type": "workspace_note", "node": "writerAgent", "detail": detail})
+        raise RuntimeError(detail)
     if seed_info.get("files"):
         writer(
             {
@@ -184,8 +193,6 @@ def run_writer_agent(
                 "detail": f"论文骨架已按国赛模板生成：{', '.join(seed_info['files'])}",
             }
         )
-    elif not seed_info.get("ok"):
-        writer({"type": "workspace_note", "node": "writerAgent", "detail": seed_info.get("reason", "")})
 
     status = paper_status(runtime.workspace)
     system_prompt = WRITER_PROMPT if not status["compile_ok"] else WRITER_PROMPT_SHORT
