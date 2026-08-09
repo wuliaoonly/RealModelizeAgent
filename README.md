@@ -4,10 +4,10 @@
 输入一道数模竞赛题（CUMCM/MCM），端到端输出：
 
 - `题目分析.md`、`建模方案.json` —— 问题重述、模型选择与结构化方案总纲（建模手）
-- `problem1/`、`problem2/`… —— **每问独立目录**：`方案/`、`代码/`、`图表/`、`结果/`（编程手逐问求解出图）
+- `problem1/`、`problem2/`… —— **每问独立目录**：方案、独立可执行代码、图表、结果与 `evidence.json`
 - `research/研究资料.md` —— 研究手真实联网检索结果（仅真实返回，禁止编造）
 - `research/参考文献.bib` —— 研究手为每条真实来源生成的 BibTeX 条目（键名 `rN`，供论文手 `\cite` 引用）
-- **`论文.tex` / `论文.pdf`** —— CUMCM 风格 LaTeX 论文（论文手按 `数模论文模板/` 就地填充，xelatex 编译）
+- **`论文.tex` / `论文.pdf`** —— CUMCM 风格论文（专用 LaTeX 工具编译并记录源码指纹、退出码和日志状态）
 
 工作流：`coordinator（判定数模题）→ planner（规划+全链路监督）→ 研究手/建模手 → 编程手 → 论文手 → verifier（验收循环）`，
 Agent 间自带反馈闭环：**研究手↔建模手**（资料不足再检索）、**建模手↔编程手**（结果核验不达标下发修订）、
@@ -66,7 +66,7 @@ problem1/                  # 每问独立目录（数量 = ques_count）
   ├── 方案/问题1_方案.md    # 建模手：该问建模方案
   ├── 代码/问题1_求解.py    # 编程手：该问求解脚本
   ├── 图表/fig1_*.png       # 编程手：该问核心图（EDA/敏感性图在 problem1/图表/EDA|Sensitivity/）
-  └── 结果/result1.csv|json # 编程手：该问结果数据
+  └── 结果/                 # 结果数据 + evidence.json + execution.json
 problem2/ ...              # 依题目问数扩展
 NOTEPAD.md                # 跨 Agent 持久化笔记（图表清单 + 关键数字）
 TODO.md                   # 任务清单
@@ -102,3 +102,12 @@ src/real_modelize_agent/
 ├── providers/    OpenAI 兼容模型工厂
 └── tools/        文件、shell、grep、便签、任务、网络搜索等工具注册
 ```
+
+## 可信验收与证据链
+
+- verifier 的最终结论必须同时通过运行时确定性门禁和 LLM 语义质检；LLM 不能省略强制检查。
+- verifier 与论文手没有通用 Shell。编程手命令执行采用 allowlist、`shell=False`，拒绝管道、重定向、后台任务与 `python -c/-m`。
+- 每问入口脚本必须可独立运行。受限执行器自动写入 `problemN/结果/execution.json`，记录源码 SHA256 与退出码。
+- 每问 `evidence.json` 记录输入哈希、模型假设/单位、验证切分、泄漏控制、基线、诊断、敏感性范围依据、Figure Contract 与论文 claim。
+- `论文.pdf` 存在不代表编译成功；只有专用编译记录成功、无致命日志错误且源码指纹未变化时才算通过。
+- checkpoint Git 排除环境文件、密钥和大型二进制产物，并按节点阶段去重快照。

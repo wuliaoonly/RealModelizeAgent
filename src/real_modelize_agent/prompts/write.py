@@ -93,6 +93,8 @@ WRITER_PROMPT = """# Role
 - 把 `\\bibliographystyle{unsrtnat}` 与 `\\bibliography{references.bib}` 替换为行内 thebibliography：
   `\\begin{thebibliography}{9}\\bibitem{r1} 真实标题. 真实URL.\\bibitem{r2} ...\\end{thebibliography}`
   （键名必须与 .bib 一致；`\\cite{r1}` 正常上标编号；保留已有的 `\\addcontentsline{toc}{section}{参考文献}`）。
+- 每次使用 `\\cite{rN}` 后，把被支撑的 evidence claim id 回填到 `research/来源台账.json` 对应 rN 的 `claim_ids`；
+  作者、年份或 DOI 缺失时保持 null，不得补造。
 
 # 模型评价
 - 优点数量多于缺点；缺点约2-3个；每个优缺点都要有具体依据。

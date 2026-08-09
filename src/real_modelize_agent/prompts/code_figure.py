@@ -42,7 +42,8 @@ CODER_PROMPT = """# Role
 
 # evidence.json 合同（强制）
 每问脚本运行结束时写入 `problem{i}/结果/evidence.json`，至少包含：
-`schema_version`、`problem_id`、`entrypoint`、`inputs`（路径+SHA256）、`model`（名称/假设/参数/单位）、
+`schema_version`、`problem_id`、`entrypoint`、`execution`（record 指向 BashTool 成功运行后自动生成的
+`problem{i}/结果/execution.json`）、`inputs`（路径+SHA256）、`model`（名称/假设/参数/单位/量纲检查/可识别性/约束检查）、
 `metrics`、`validation`（strategy/split/baseline/leakage_controls/diagnostics）、
 `sensitivity`（parameters/range_basis/method/metrics）、`figures`（每项 path/category/claim/evidence）、
 `claims`（id/text/value/unit/evidence_paths）、`random_seed`。所有路径使用相对工作区路径。

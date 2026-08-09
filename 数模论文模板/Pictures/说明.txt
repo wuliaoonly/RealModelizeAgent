@@ -1,0 +1,10 @@
+Pictures/ 目录结构（按题目分文件夹，方便管理）：
+
+  Preparation/  数据预处理、整体分析相关图片
+  Question1/    问题一相关图片
+  Question2/    问题二相关图片
+  Question3/    问题三相关图片
+  流程图示例.jpg  模板自带的示例流程图（正文 main.tex 中引用了它，可替换）
+
+引用方式（相对 main.tex 所在目录）：
+  \includegraphics[width=0.9\textwidth]{Pictures/Question1/你的图.png}

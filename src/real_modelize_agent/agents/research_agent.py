@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from dotenv import load_dotenv
@@ -171,6 +172,8 @@ def _append_research_round(state: RealModelizeGraphState, file_path, query: str,
                     key = f"r{max_index}"
                     _append_bib_entry(bib_path, key, item)
                     url_to_key[url] = key
+                if url and key:
+                    _upsert_source_ledger(file_path.parent / "来源台账.json", key, item)
                 cite_suffix = f"  〔\\cite{{{key}}}〕" if key else ""
                 lines.append(
                     f"  - **{title or url}**{url and f'（{url}）' or ''}{cite_suffix}"
@@ -220,12 +223,38 @@ def _append_bib_entry(bib_path, key: str, item: dict[str, Any]) -> None:
     entry = [f"\n@misc{{{key},", f"  title = {{{title}}},", f"  url = {{{url}}},"]
     if year:
         entry.append(f"  year = {{{year}}},")
+    doi = str(item.get("doi") or "").strip()
+    if doi:
+        entry.append(f"  doi = {{{_bib_escape(doi)}}},")
+    entry.append(f"  urldate = {{{datetime.now(timezone.utc).date().isoformat()}}},")
     entry.append("}")
     try:
         with bib_path.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(entry))
     except OSError:
         pass
+
+
+def _upsert_source_ledger(path, key: str, item: dict[str, Any]) -> None:
+    """Persist only returned metadata; missing author/DOI stays null, never invented."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"version": 1, "sources": []}
+    except (OSError, json.JSONDecodeError):
+        payload = {"version": 1, "sources": []}
+    sources = payload.get("sources") if isinstance(payload.get("sources"), list) else []
+    record = {
+        "key": key,
+        "title": str(item.get("title") or ""),
+        "url": str(item.get("url") or ""),
+        "author": item.get("author") or item.get("authors"),
+        "year": _extract_year(str(item.get("published_date") or "")) or None,
+        "doi": item.get("doi") or None,
+        "accessed_at": datetime.now(timezone.utc).isoformat(),
+        "claim_ids": [],
+    }
+    sources = [source for source in sources if source.get("url") != record["url"]]
+    sources.append(record)
+    path.write_text(json.dumps({"version": 1, "sources": sources}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _extract_year(published_date: str) -> str:

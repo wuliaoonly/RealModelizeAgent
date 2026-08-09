@@ -9,9 +9,17 @@ tests/
 .pytest_cache/
 scripts/smoke_test.py
 
-# ===== 赛题与论文模板数据（非源码，不入库）=====
-problem/
-数模论文模板/
+# ===== 赛题数据（problem 目录仅保留空占位，不推比赛数据文件）=====
+problem/*
+!problem/.gitkeep
+
+# ===== 论文模板：入库模板本体，忽略 LaTeX 编译产物 =====
+数模论文模板/main.aux
+数模论文模板/main.bbl
+数模论文模板/main.blg
+数模论文模板/main.log
+数模论文模板/main.out
+数模论文模板/main.pdf
 
 # ===== 运行时产物 =====
 .real-modelize/

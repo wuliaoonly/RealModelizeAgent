@@ -50,6 +50,8 @@ def web_search(
                 "content": str(item.get("content", ""))[:1200],
                 "score": item.get("score"),
                 "published_date": item.get("published_date"),
+                "author": item.get("author") or item.get("authors"),
+                "doi": item.get("doi"),
             }
         )
 

@@ -18,6 +18,7 @@ REQUIRED_EVIDENCE_KEYS = {
     "schema_version",
     "problem_id",
     "entrypoint",
+    "execution",
     "inputs",
     "model",
     "metrics",
@@ -101,13 +102,14 @@ def _validate_problem(workspace: Path, name: str) -> list[dict[str, Any]]:
     figure_files = [p for p in (root / "图表").rglob("*.png") if p.is_file()] if (root / "图表").is_dir() else []
     entrypoints = [path for path in code_files if _is_independent_entrypoint(path)]
     valid_figures = [path for path in figure_files if _valid_png(path)]
+    vector_pairs = bool(valid_figures) and all(path.with_suffix(".svg").is_file() for path in valid_figures)
     evidence = root / "结果" / "evidence.json"
     evidence_errors = _validate_evidence(evidence, name, workspace)
     return [
         _check(f"{name}:方案", bool(plan_files) and all(path.stat().st_size >= 200 for path in plan_files), "至少一个非空详细方案"),
         _check(f"{name}:独立代码", bool(entrypoints), "必须有含 main() 与 __main__ 入口的独立求解脚本"),
         _check(f"{name}:结果", bool(result_files), "结果目录必须含非空文件"),
-        _check(f"{name}:图表", bool(valid_figures), "至少一张可解码的 PNG"),
+        _check(f"{name}:图表", bool(valid_figures) and vector_pairs, "有效 PNG 必须有同名可编辑 SVG"),
         _check(f"{name}:证据链", not evidence_errors, "; ".join(evidence_errors) or "evidence.json 合同有效"),
     ]
 
@@ -157,7 +159,22 @@ def _validate_citations(workspace: Path) -> dict[str, Any]:
     available = set(BIB_KEY_RE.findall(bib_text))
     inline = set(re.findall(r"\\bibitem\{([^}]+)\}", text))
     missing = sorted(cited - available - inline)
-    return _check("参考文献溯源", not missing, "全部 cite 键可追溯" if not missing else f"缺少真实条目：{', '.join(missing)}")
+    issues: list[str] = []
+    if available and not cited:
+        issues.append("已有真实文献库但正文没有 cite")
+    if missing:
+        issues.append(f"缺少真实条目：{', '.join(missing)}")
+    ledger_path = workspace / "research" / "来源台账.json"
+    if cited and ledger_path.exists():
+        try:
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            by_key = {item.get("key"): item for item in ledger.get("sources", []) if isinstance(item, dict)}
+            unbound = sorted(key for key in cited if key in by_key and not by_key[key].get("claim_ids"))
+            if unbound:
+                issues.append(f"来源未绑定 claim_ids：{', '.join(unbound)}")
+        except (OSError, json.JSONDecodeError):
+            issues.append("来源台账 JSON 非法")
+    return _check("参考文献溯源", not issues, "; ".join(issues) or "全部 cite 键与 claim 可追溯")
 
 
 def _validate_evidence(path: Path, problem_id: str, workspace: Path) -> list[str]:
@@ -171,9 +188,33 @@ def _validate_evidence(path: Path, problem_id: str, workspace: Path) -> list[str
         errors.append("problem_id 不一致")
     if str(payload.get("schema_version")) != "1.0":
         errors.append("schema_version 必须为 1.0")
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, list) or not inputs:
+        errors.append("inputs 不能为空")
+    else:
+        for item in inputs:
+            if not isinstance(item, dict) or not item.get("path") or not item.get("sha256"):
+                errors.append("inputs 每项必须包含 path 与 sha256")
+                break
+            input_path = workspace / str(item["path"])
+            if not input_path.is_file() or _sha256(input_path) != str(item["sha256"]):
+                errors.append(f"输入哈希缺失或已变化：{item.get('path')}")
+                break
     entry = workspace / str(payload.get("entrypoint", ""))
     if not entry.is_file() or not _is_independent_entrypoint(entry):
         errors.append("entrypoint 不存在或不可独立运行")
+    execution = payload.get("execution")
+    if not isinstance(execution, dict) or not execution.get("record"):
+        errors.append("execution 必须引用受限执行器生成的 record")
+    else:
+        record_path = workspace / str(execution.get("record"))
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            source_matches = record.get("source_sha256") == _sha256(entry)
+            if not record.get("ok") or record.get("exit_code") != 0 or record.get("entrypoint") != payload.get("entrypoint") or not source_matches:
+                errors.append("execution record 失败、过期或与入口脚本不匹配")
+        except (OSError, json.JSONDecodeError):
+            errors.append("execution record 缺失或非法")
     validation = payload.get("validation")
     if not isinstance(validation, dict) or not all(
         validation.get(key) for key in ("strategy", "split", "baseline", "leakage_controls", "diagnostics")
@@ -203,8 +244,16 @@ def _validate_evidence(path: Path, problem_id: str, workspace: Path) -> list[str
         )
     ):
         errors.append("figures 必须包含带 claim 的 Figure Contract")
-    if not isinstance(payload.get("claims"), list) or not payload.get("claims"):
+    claims = payload.get("claims")
+    if not isinstance(claims, list) or not claims:
         errors.append("claims 不能为空")
+    elif any(
+        not isinstance(claim, dict)
+        or not all(claim.get(key) not in (None, "", []) for key in ("id", "text", "evidence_paths"))
+        or any(not (workspace / str(path)).is_file() for path in claim.get("evidence_paths", []))
+        for claim in claims
+    ):
+        errors.append("claims 必须具有 id/text 和存在的 evidence_paths")
     return errors
 
 
@@ -236,3 +285,9 @@ def _valid_png(path: Path) -> bool:
 
 def _check(name: str, passed: bool, detail: str) -> dict[str, Any]:
     return {"name": name, "passed": bool(passed), "detail": detail}
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""

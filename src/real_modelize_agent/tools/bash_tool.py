@@ -7,6 +7,9 @@ import shlex
 import subprocess
 import sys
 import time
+import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -270,7 +273,7 @@ def run_bash(
         }
 
     output = _format_captured_output(state, _decode_output(completed.stdout), _decode_output(completed.stderr), max_output_chars)
-    return {
+    result = {
         "ok": completed.returncode == 0,
         "timed_out": False,
         "command": normalized_command,
@@ -279,6 +282,43 @@ def run_bash(
         "duration_ms": round((time.perf_counter() - started) * 1000),
         **(approval or {}),
     }
+    execution_record = _persist_python_execution_record(state, argv, result)
+    if execution_record:
+        result["execution_record"] = execution_record
+    return result
+
+
+def _persist_python_execution_record(
+    state: RuntimeState, argv: list[str], result: dict[str, Any]
+) -> str:
+    if Path(argv[0]).name.lower() not in {"python", "python.exe"}:
+        return ""
+    script_arg = next((arg for arg in argv[1:] if not arg.startswith("-") and arg.endswith(".py")), "")
+    if not script_arg:
+        return ""
+    script = state.assert_workspace_path(state.workspace / script_arg)
+    if not script.is_file():
+        return ""
+    rel = script.relative_to(state.workspace).as_posix()
+    parts = script.relative_to(state.workspace).parts
+    if len(parts) >= 3 and parts[0].startswith("problem") and parts[1] == "代码":
+        record_path = state.workspace / parts[0] / "结果" / "execution.json"
+    else:
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", rel)
+        record_path = state.workspace / ".real-modelize" / "executions" / f"{safe_name}.json"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "version": 1,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "command": argv,
+        "entrypoint": rel,
+        "source_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+        "exit_code": result.get("exit_code"),
+        "ok": bool(result.get("ok")),
+        "duration_ms": result.get("duration_ms"),
+    }
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return record_path.relative_to(state.workspace).as_posix()
 
 
 def _resolve_approval(state: RuntimeState, command: str) -> dict[str, Any] | None:
