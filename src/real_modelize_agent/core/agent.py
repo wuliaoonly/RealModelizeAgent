@@ -9,6 +9,8 @@ from langgraph.graph import add_messages
 
 from real_modelize_agent.core.checkpoint import CheckpointManager, load_resume_inputs, normalize_checkpoint_mode
 from real_modelize_agent.core.paths import default_workspace
+from real_modelize_agent.core.human_loop import classify_user_input, record_human_request
+from real_modelize_agent.agents.chat_agent import peer_chat
 from real_modelize_agent.core.session import (
     append_assistant_turn,
     append_user_turn,
@@ -67,6 +69,16 @@ def stream_agent_events(
     （planner→建模手/编程手/论文手→verifier 循环），否则直接结束。
     """
     resume_path = resume_workspace.expanduser() if resume_workspace is not None else None
+    incoming_text = task or ("继续执行现有计划" if resume_path is not None else "")
+    decision = classify_user_input(incoming_text, has_existing_workspace=resume_path is not None)
+    yield {"type": "custom_event", "event": {"type": "intent_decision", **decision.to_dict()}}
+    if decision.intent == "chat":
+        result = peer_chat(incoming_text, writer=lambda event: None)
+        for reply in result["replies"]:
+            yield {"type": "custom_event", "event": {"type": "peer_reply", **reply}}
+        yield {"type": "graph_event", "event": {"chat": {"final_answer": result["final_answer"], "user_intent": "chat"}}}
+        return
+
     if resume_path is None:
         detected = False
         entry_state: dict[str, Any] = {"task": task or "", "messages": []}
@@ -92,6 +104,14 @@ def stream_agent_events(
     )
     workflow = build_complex_workflow()
     yield {"type": "workspace", "path": str(state.workspace)}
+    request_log = record_human_request(state.workspace, decision)
+    yield {"type": "custom_event", "event": {"type": "human_request_recorded", "path": str(request_log)}}
+
+    session = load_or_create_session(state.workspace)
+    turn = append_user_turn(session, incoming_text)
+    save_session(state.workspace, session)
+    yield {"type": "custom_event", "event": session_started_event(state.workspace, session, resumed=resume_path is not None)}
+    yield {"type": "custom_event", "event": session_turn_started_event(state.workspace, session, turn=turn, task=incoming_text)}
 
     resumed = False
     resume_event: dict[str, Any] | None = None
@@ -108,6 +128,15 @@ def stream_agent_events(
             "max_attempts": max_attempts,
         }
 
+    inputs["user_intent"] = decision.intent
+    inputs["user_instruction"] = decision.to_dict() if decision.intent == "instruction" else {}
+    inputs["instruction_applied"] = False
+    inputs["chart_style_request"] = decision.chart_style
+    inputs["paragraph_edit_request"] = decision.paragraph_edit
+    inputs["session_id"] = session.get("session_id", "")
+    inputs["session_turn"] = turn
+    inputs["session_context"] = build_session_context(state.workspace, session)
+
     current_state: dict[str, Any] = dict(inputs)
     manager = CheckpointManager(state, task=str(current_state.get("task", "")))
     trace = TraceRecorder(state, task=str(current_state.get("task", "")))
@@ -118,6 +147,7 @@ def stream_agent_events(
     if started_checkpoint:
         trace.record_custom_event(started_checkpoint)
     latest_node = "start"
+    final_answer = ""
 
     try:
         for mode, event in workflow.stream(inputs, stream_mode=["updates", "custom"]):
@@ -131,6 +161,9 @@ def stream_agent_events(
             else:
                 latest_node = _latest_graph_node(event) or latest_node
                 _merge_graph_update(current_state, event)
+                for update in event.values() if isinstance(event, dict) else []:
+                    if isinstance(update, dict) and update.get("final_answer"):
+                        final_answer = str(update["final_answer"])
                 trace.record_graph_update(event)
                 saved = manager.save(current_state, status="running", latest_node=latest_node, event={"mode": mode, "payload": event})
                 if saved:
@@ -153,6 +186,9 @@ def stream_agent_events(
     trace_event = trace.end(status="finished", latest_node=latest_node, final_state=current_state)
     if trace_event:
         yield {"type": "custom_event", "event": trace_event}
+    append_assistant_turn(session, turn=turn, route=decision.target, content=final_answer or "本轮工作流已结束。")
+    save_session(state.workspace, session)
+    yield {"type": "custom_event", "event": session_turn_saved_event(state.workspace, session, turn=turn, route=decision.target)}
 
 
 def _env_int(name: str, default: int) -> int:

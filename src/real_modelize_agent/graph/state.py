@@ -71,6 +71,13 @@ class RealModelizeGraphState(TypedDict, total=False):
     todos: list[TodoItem]
     acceptance_criteria: list[str]
     verification_commands: list[str]
+    execution_commands: list[str]
+    user_intent: str
+    user_instruction: dict[str, Any]
+    instruction_applied: bool
+    chart_style_request: dict[str, Any]
+    paragraph_edit_request: dict[str, Any]
+    figure_audit: dict[str, Any]
     # 验证
     verification_results: list[VerificationResult]
     verification_checks: list[VerificationCheck]

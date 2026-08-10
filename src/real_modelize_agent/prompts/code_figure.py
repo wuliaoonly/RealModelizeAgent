@@ -60,6 +60,9 @@ CODER_PROMPT = """# Role
 - 右偏分布考虑 `np.log1p()`。关键参数必须有来源说明（数据统计/文献/网格搜索三选一）。
 
 # 可视化规范（学术论文标准）
+人工样式要求优先于下面的默认值。开始绘图前必须调用 FigureStyleReadTool，并在每个独立入口中调用
+`real_modelize_agent.core.figure_style.apply_matplotlib_style(style)`；结束前调用 FigureAuditTool。
+FigureAuditTool 未通过时必须修改脚本并重跑。这样统一保证中文字体回退、负号显示、字号、整体配色、300dpi 与 SVG 文本保留。
 每个脚本开头设置全局配置：
 ```python
 import matplotlib.pyplot as plt
@@ -120,4 +123,5 @@ CODER_PROMPT_SHORT = """# Role
 - 更新缺失的图（`problem{i}/图表/`）与结果文件（`problem{i}/结果/`），并刷新 NOTEPAD.md 的图片清单与关键数字。
 - 同步刷新 `problem{i}/结果/evidence.json`；脚本必须为独立 `main()` 入口并从根目录运行成功。
 - 写权限：FileWrite/Edit 仅限 `*/代码/`、`utils/`（共享工具）与 `tmp/`；临时/调试脚本放 `tmp/`，禁止写 `run_all.py` 或根目录文件。
+- 修改图表时先读 FigureStyleReadTool，在入口调用 apply_matplotlib_style(style)，按用户指定 fontsize/palette 重绘；最后 FigureAuditTool 必须通过。
 """

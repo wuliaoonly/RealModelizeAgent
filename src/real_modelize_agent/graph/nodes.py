@@ -164,6 +164,15 @@ def planner_node(state: RealModelizeGraphState) -> dict[str, Any]:
             working_state.get("verification_commands", []),
             working_state.get("plan_summary", ""),
         )
+    _inject_user_instruction(working_state)
+    if working_state.get("user_instruction"):
+        persist_todos(
+            working_state["runtime"],
+            working_state.get("todos", []),
+            working_state.get("acceptance_criteria", []),
+            working_state.get("verification_commands", []),
+            working_state.get("plan_summary", ""),
+        )
 
     memory = build_layered_memory(working_state, node="planner")
     writer(memory_event(memory, node="planner"))
@@ -182,6 +191,7 @@ def planner_node(state: RealModelizeGraphState) -> dict[str, Any]:
             "plan_summary": working_state.get("plan_summary", ""),
             "todos": working_state.get("todos", []),
             "verification_commands": working_state.get("verification_commands", []),
+            "execution_commands": working_state.get("execution_commands", []),
             "attempts": state.get("attempts", 0),
         }
     )
@@ -208,6 +218,12 @@ def planner_node(state: RealModelizeGraphState) -> dict[str, Any]:
         "todos": working_state.get("todos", []),
         "acceptance_criteria": working_state.get("acceptance_criteria", []),
         "verification_commands": working_state.get("verification_commands", []),
+        "execution_commands": working_state.get("execution_commands", []),
+        "user_instruction": working_state.get("user_instruction", {}),
+        "instruction_applied": working_state.get("instruction_applied", False),
+        "chart_style_request": working_state.get("chart_style_request", {}),
+        "paragraph_edit_request": working_state.get("paragraph_edit_request", {}),
+        "figure_audit": working_state.get("figure_audit", {}),
         "research_notes": working_state.get("research_notes", ""),
         "research_path": working_state.get("research_path", ""),
         "references_bib": working_state.get("references_bib", ""),
@@ -504,11 +520,11 @@ def _build_planner_tools(state: RealModelizeGraphState, writer) -> list[Structur
     return [
         StructuredTool.from_function(
             name="TodoWriteTool",
-            func=lambda todos, acceptance_criteria, verification_commands, plan_summary="": _todo_write_tool(
-                state, writer, todos, acceptance_criteria, verification_commands, plan_summary
+            func=lambda todos, acceptance_criteria, verification_commands, plan_summary="", execution_commands=None: _todo_write_tool(
+                state, writer, todos, acceptance_criteria, verification_commands, plan_summary, execution_commands
             ),
             description=(
-                "发布或修订计划状态。Args: todos, acceptance_criteria, verification_commands, optional plan_summary."
+                "发布或修订计划状态。Args: todos, acceptance_criteria, verification_commands, optional plan_summary and execution_commands."
             ),
         ),
         StructuredTool.from_function(
@@ -553,6 +569,7 @@ def _todo_write_tool(
     acceptance_criteria: Any,
     verification_commands: Any,
     plan_summary: str = "",
+    execution_commands: Any = None,
 ) -> dict[str, Any]:
     result = write_todos(todos, acceptance_criteria, verification_commands)
     if result.get("ok"):
@@ -560,6 +577,8 @@ def _todo_write_tool(
         state["todos"] = _todo_items(result["todos"], existing=state.get("todos", []))
         state["acceptance_criteria"] = result["acceptance_criteria"]
         state["verification_commands"] = result["verification_commands"]
+        if execution_commands is not None:
+            state["execution_commands"] = [str(item) for item in execution_commands if str(item).strip()]
         persist_todos(
             state["runtime"],
             state["todos"],
@@ -574,6 +593,7 @@ def _todo_write_tool(
                 "plan_summary": state.get("plan_summary", ""),
                 "todos": state.get("todos", []),
                 "verification_commands": state.get("verification_commands", []),
+                "execution_commands": state.get("execution_commands", []),
                 "acceptance_criteria": state.get("acceptance_criteria", []),
             }
         )
@@ -581,6 +601,7 @@ def _todo_write_tool(
         **result,
         "plan_summary": state.get("plan_summary", ""),
         "todo_items": state.get("todos", []),
+        "execution_commands": state.get("execution_commands", []),
     }
 
 
@@ -802,6 +823,13 @@ def _planner_input(state: RealModelizeGraphState, memory: dict[str, Any]) -> str
         )
     if state.get("session_context"):
         parts.append("多轮会话上下文：\n" + str(state.get("session_context", "")))
+    if state.get("user_instruction"):
+        parts.append(
+            "本轮用户指令（必须决定插入计划还是执行命令，并委派目标 Agent）：\n"
+            + json.dumps(state["user_instruction"], ensure_ascii=False, indent=2)
+        )
+    if state.get("execution_commands"):
+        parts.append("待执行命令字段：\n" + json.dumps(state["execution_commands"], ensure_ascii=False, indent=2))
     parts.append("分层记忆快照：\n" + format_layered_memory_for_prompt(memory))
     return "\n\n".join(parts)
 
@@ -845,6 +873,25 @@ def _default_plan(task: str) -> dict[str, Any]:
         "acceptance_criteria": ["请求的交付物存在。", "verifier 模型确认完成。"],
         "verification_commands": [],
     }
+
+
+def _inject_user_instruction(state: RealModelizeGraphState) -> None:
+    instruction = state.get("user_instruction")
+    if not instruction or state.get("instruction_applied"):
+        return
+    raw = str(instruction.get("raw_text", "")).strip()
+    action = instruction.get("plan_action")
+    if raw and action == "insert_plan":
+        todos = [dict(item) for item in state.get("todos", [])]
+        if not any(item.get("content") == f"用户指令：{raw}" for item in todos):
+            todos.append({"id": f"todo-{len(todos) + 1}", "content": f"用户指令：{raw}", "status": "pending", "note": "human-in-loop"})
+        state["todos"] = todos
+    elif raw:
+        commands = list(state.get("execution_commands", []))
+        if raw not in commands:
+            commands.append(raw)
+        state["execution_commands"] = commands
+    state["instruction_applied"] = True
 
 
 def _apply_plan(state: RealModelizeGraphState, plan: dict[str, Any]) -> None:

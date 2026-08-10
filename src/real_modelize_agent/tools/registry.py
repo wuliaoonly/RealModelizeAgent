@@ -14,7 +14,9 @@ from real_modelize_agent.tools.file_tools import (
 from real_modelize_agent.tools.grep_tool import grep
 from real_modelize_agent.tools.notepad_tool import append_notepad, read_notepad
 from real_modelize_agent.tools.latex_tool import compile_latex, latex_compile_status
+from real_modelize_agent.core.figure_style import audit_figure_workspace, load_figure_style
 from real_modelize_agent.core.validation import validate_workspace
+from real_modelize_agent.tools.paper_edit_tool import edit_paper_paragraph
 from real_modelize_agent.tools.todo_tool import build_todo_update_tool
 from real_modelize_agent.tools.web_search_tool import build_web_search_tool
 
@@ -183,6 +185,16 @@ def build_coder_tools(state: RuntimeState, todos: list[dict[str, str]] | None = 
             func=lambda heading, content: append_notepad(state, heading, content),
             description="Append a durable markdown note to NOTEPAD.md. Args: heading, content.",
         ),
+        StructuredTool.from_function(
+            name="FigureStyleReadTool",
+            func=lambda: {"ok": True, "style": load_figure_style(state.workspace)},
+            description="Read the human-approved chart font sizes, CJK font fallbacks, DPI and palette.",
+        ),
+        StructuredTool.from_function(
+            name="FigureAuditTool",
+            func=lambda: audit_figure_workspace(state.workspace),
+            description="Deterministically audit solver scripts and PNG figures for CJK font setup, requested palette and image quality.",
+        ),
     ] + [build_todo_update_tool(list(todos or []))]
 
 
@@ -198,6 +210,23 @@ def build_writer_tools(state: RuntimeState, todos: list[dict[str, str]] | None =
             description=(
                 "Compile the root paper with an allowlisted LaTeX engine without a shell and persist "
                 "an auditable status record. Args: tex_name='论文.tex', optional engine, passes=2."
+            ),
+        )
+    )
+    tools.append(
+        StructuredTool.from_function(
+            name="PaperParagraphEditTool",
+            func=lambda section, replacement, paragraph_index=None, anchor=None, tex_name="论文.tex": edit_paper_paragraph(
+                state.workspace,
+                section=section,
+                replacement=replacement,
+                paragraph_index=paragraph_index,
+                anchor=anchor,
+                tex_name=tex_name,
+            ),
+            description=(
+                "Safely replace exactly one paragraph in 论文.tex. Select a unique section and either a 1-based "
+                "paragraph_index or unique anchor, provide replacement, then compile."
             ),
         )
     )

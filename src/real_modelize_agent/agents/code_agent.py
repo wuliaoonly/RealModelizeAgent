@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from real_modelize_agent.agents.artifacts import collect_figures, collect_problem_artifacts, has_real_solutions
 from real_modelize_agent.core.state import RuntimeState
+from real_modelize_agent.core.figure_style import audit_figure_workspace, load_figure_style, save_figure_style
 from real_modelize_agent.graph.memory import build_layered_memory, format_layered_memory_for_prompt, memory_event
 from real_modelize_agent.graph.state import RealModelizeGraphState
 from real_modelize_agent.prompts.code_figure import CODER_PROMPT, CODER_PROMPT_SHORT
@@ -31,6 +32,9 @@ def run_coder_agent(
     runtime = state["runtime"]
     todos = [dict(todo) for todo in state.get("todos", [])]
     writer = writer or (lambda _: None)
+    style_request = dict(state.get("chart_style_request", {}) or {})
+    style_info = save_figure_style(runtime.workspace, style_request)
+    writer({"type": "human_review", "node": "coderAgent", "phase": "style_applied", **style_info})
     memory = build_layered_memory({**state, "todos": todos}, node="coderAgent")
     writer(memory_event(memory, node="coderAgent"))
     model = create_model()
@@ -86,8 +90,10 @@ def run_coder_agent(
 
     summary = _last_ai_content(produced_messages)
     figures = collect_figures(runtime.workspace)
+    figure_audit = audit_figure_workspace(runtime.workspace)
+    writer({"type": "figure_check", "node": "coderAgent", "passed": figure_audit["ok"], "detail": figure_audit})
     return {
-        "ok": True,
+        "ok": figure_audit["ok"],
         "summary": summary,
         "todos": todos or state.get("todos", []),
         "figures": figures,
@@ -95,6 +101,7 @@ def run_coder_agent(
         "problem_artifacts": collect_problem_artifacts(runtime.workspace),
         "messages": produced_messages,
         "tool_events": tool_events,
+        "figure_audit": figure_audit,
     }
 
 
@@ -154,6 +161,15 @@ def _coder_input(state: RealModelizeGraphState, instruction: str, memory: dict[s
         )
     if state.get("research_path"):
         parts.append(f"研究资料: {state['research_path']}")
+    parts.append(
+        "人工确认的图表样式（必须逐项执行）:\n"
+        + json.dumps(load_figure_style(state["runtime"].workspace), ensure_ascii=False, indent=2)
+    )
+    parts.append(
+        "所有绘图入口必须先调用 `real_modelize_agent.core.figure_style.apply_matplotlib_style(style)`；"
+        "先用 FigureStyleReadTool 读取 style，再按其中 fontsize 与 palette 绘图，最后必须调用 FigureAuditTool。"
+        "若审计未通过，修改源代码并重跑，不能宣称完成。"
+    )
     parts.append("分层记忆快照:\n" + format_layered_memory_for_prompt(memory))
     parts.append(
         "请在 Windows 环境下用 python 求解：先读数据 → EDA → 逐问建模求解 → 每问产出 "

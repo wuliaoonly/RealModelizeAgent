@@ -54,6 +54,23 @@ real-modelize compile --workspace path/to/workspace
 常用标志：`--workspace/-w`、`--max-attempts`（默认 3）、`--approval-mode inline|auto|deny`、
 `--checkpoint-mode light|strict|off`、`--trace-mode on|off`、`--resume <workspace>`。
 
+### 人工反馈与定向修改
+
+入口会先把输入识别为 `chat`、`instruction` 或新 `task`。闲聊只汇总多个专家 Agent 的只读回复；
+已有工作区的指令交给 planner，写入现有计划或 `execution_commands` 后再委派，不会被 coordinator 当作非数模题拒绝。
+
+```powershell
+# 修改已有工作区的全部图表：字号、中文字体回退和整体配色会写入统一样式配置并自动质检
+real-modelize --resume path/to/workspace "把图表字号设为 14，改成暖色配色并重新出图"
+
+# 只修改论文中的一个段落；writer 用章节 + 段落序号/唯一锚点精确定位，再重新编译
+real-modelize --resume path/to/workspace "修改论文中模型的评价和改进章节第 2 段，使表述更严谨"
+```
+
+人工请求记录在 `.real-modelize/human-loop/requests.jsonl`，图表样式记录在
+`.real-modelize/human-loop/figure-style.json`。coder 的 `FigureAuditTool` 会检查中文字体配置、用户配色和 PNG 清晰度；
+writer 的 `PaperParagraphEditTool` 在目标不唯一时拒绝修改，避免误改整篇论文。
+
 ## 工作区结构
 
 一次任务的工作区（默认 `.real-modelize/workspaces/workspace-*`）：

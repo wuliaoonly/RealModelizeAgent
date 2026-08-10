@@ -275,6 +275,12 @@ def _writer_input(state: RealModelizeGraphState, instruction: str, memory: dict[
         )
     if state.get("figures"):
         parts.append("已生成图片（须全部插入论文）:\n" + "\n".join(f"- {path}" for path in state["figures"]))
+    if state.get("paragraph_edit_request"):
+        parts.append(
+            "人工指定的单段修改请求（优先执行，严格限制为一个段落）：\n"
+            + json.dumps(state["paragraph_edit_request"], ensure_ascii=False, indent=2)
+        )
+        parts.append("使用 PaperParagraphEditTool 精确修改后，必须 CompileLatexTool 编译两遍；不要重写其他段落。")
     parts.append("分层记忆快照:\n" + format_layered_memory_for_prompt(memory))
     parts.append(
         "写作轮：面向全文按模板章节就地填充写作（摘要/一问题的提出和重述/二问题的分析/三模型假设/四符号说明/"

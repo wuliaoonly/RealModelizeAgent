@@ -84,6 +84,7 @@ def call_coder_handoff(
     state["coder_summary"] = result.get("summary", "")
     state["figures"] = result.get("figures", [])
     state["results_summary"] = result.get("results_summary", "")
+    state["figure_audit"] = result.get("figure_audit", {})
     # 权威磁盘扫描（非 agent 返回值），保证 modeler/writer/planner 三方看到一致事实
     state["problem_artifacts"] = collect_problem_artifacts(state["runtime"].workspace)
     state["agent_handoffs"] = list(state.get("agent_handoffs", [])) + [
@@ -96,11 +97,12 @@ def call_coder_handoff(
     ]
     writer({"type": "handoff_result", "from": "coderAgent", "to": from_agent, "result": result.get("summary", "")})
     return {
-        "ok": True,
+        "ok": bool(result.get("ok", True)),
         "summary": result.get("summary", ""),
         "todos": state.get("todos", []),
         "figures": state.get("figures", []),
         "problem_artifacts": state.get("problem_artifacts", {}),
+        "figure_audit": state.get("figure_audit", {}),
     }
 
 
