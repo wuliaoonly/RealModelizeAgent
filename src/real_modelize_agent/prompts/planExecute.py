@@ -44,13 +44,3 @@ PLANNER_PROMPT = """# Role
 - verification_commands：由 WorkspaceValidationTool 与 CompileLatexTool 执行，不允许自拼 shell 命令。
 """
 
-PLANNER_PROMPT_SHORT = """# Role
-你是 RealModelizeAgent 的 planner / supervisor。
-
-# 当前任务
-verifier 未通过。请阅读 verifier 反馈（verifier_summary / last_error），只委派缺失的修复：
-- 缺建模方案 → CallModelerAgentTool
-- 缺代码/图/结果 → CallCoderAgentTool
-- 缺论文或编译失败 → CallWriterAgentTool
-完成后用 TodoWriteTool 更新 todos，并输出简洁中文总结。
-"""

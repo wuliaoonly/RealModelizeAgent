@@ -42,23 +42,33 @@ def summarize_event(event: dict[str, Any]) -> EventSummary:
 def summarize_custom_event(event: dict[str, Any]) -> EventSummary:
     event_type = event.get("type", "event")
     if event_type == "intent_decision":
-        route = str(event.get("route", "workflow"))
+        intent = str(event.get("intent", ""))
         return EventSummary(
             "Intent Router",
             (
-                f"route: {route}\n"
-                f"confidence: {event.get('confidence', 0)}\n"
+                f"intent: {intent or '(unknown)'}\n"
+                f"target: {event.get('target', '') or '(none)'}\n"
+                f"plan_action: {event.get('plan_action', '') or '(none)'}\n"
                 f"reason: {shorten(event.get('reason', ''), 600)}"
             ),
             "intent",
-            "cyan" if route == "chat" else "magenta",
+            "cyan" if intent == "chat" else "magenta",
         )
-    if event_type == "chat_response":
+    if event_type == "peer_reply":
         return EventSummary(
-            "RealModelize",
-            f"{shorten(event.get('response', ''), 2400)}\nmode: {event.get('mode', 'lightweight')} | reason: {event.get('reason', '')}",
+            f"Peer Reply · {event.get('agent', '')}",
+            shorten(event.get("content", ""), 1200),
             "chat",
             "cyan",
+        )
+    if event_type == "human_request_recorded":
+        return EventSummary("Human Request Recorded", str(event.get("path", "")), "checkpoint", "blue")
+    if event_type == "workspace_note":
+        return EventSummary(
+            f"Workspace Note · {event.get('node', '')}",
+            shorten(event.get("detail", ""), 600),
+            "event",
+            "yellow",
         )
     if event_type == "session_started":
         return EventSummary(
@@ -260,9 +270,6 @@ def summarize_graph_event(payload: dict[str, Any]) -> EventSummary:
         if extra:
             return EventSummary(base.title, base.body + "\n" + "\n".join(extra), base.category, base.style)
         return base
-    if node in {"actor", "codeAgent"}:
-        summary = update.get("code_agent_summary") or update.get("last_actor_summary") or update
-        return EventSummary("codeAgent Summary", shorten(summary, 800), "agent", "cyan")
     if node == "verifier":
         return EventSummary("Verifier", _format_verifier(update), "verifier", "green" if update.get("passed") else "red")
     if node == "final":
@@ -271,8 +278,6 @@ def summarize_graph_event(payload: dict[str, Any]) -> EventSummary:
         return summarize_custom_event({"type": "context_monitor", **update})
     if node == "context_compressor":
         return summarize_custom_event({"type": "context_compression", **update})
-    if node == "memory_snapshot":
-        return summarize_custom_event({"type": "memory_snapshot", **update})
     return EventSummary(node, shorten(update, 800), "graph", "white")
 
 

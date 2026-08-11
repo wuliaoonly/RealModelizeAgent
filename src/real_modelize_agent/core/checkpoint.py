@@ -365,7 +365,6 @@ def state_summary(state: dict[str, Any]) -> dict[str, Any]:
         "sources": json_safe(sources[:10] if isinstance(sources, list) else []),
         "source_count": len(sources) if isinstance(sources, list) else 0,
         "research_notes": trim_text(state.get("research_notes", ""), 1600),
-        "code_agent_summary": trim_text(state.get("code_agent_summary", "") or state.get("last_actor_summary", ""), 1600),
         "verifier_summary": trim_text(state.get("verifier_summary", ""), 1600),
         "last_error": trim_text(state.get("last_error", ""), 1600),
         "context_summary": trim_text(state.get("context_summary", ""), 1800),
@@ -414,7 +413,6 @@ def build_recovery_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Recent Summaries",
             f"- research: {summary.get('research_notes') or '(none)'}",
-            f"- codeAgent: {summary.get('code_agent_summary') or '(none)'}",
             f"- verifier: {summary.get('verifier_summary') or '(none)'}",
             f"- last_error: {summary.get('last_error') or '(none)'}",
             "",
@@ -583,7 +581,6 @@ def _copy_summary_fields(inputs: dict[str, Any], summary: dict[str, Any]) -> Non
         "problem_artifacts",
         "research_path",
         "references_bib",
-        "code_agent_summary",
         "verifier_summary",
         "last_error",
     ):

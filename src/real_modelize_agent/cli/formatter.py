@@ -61,8 +61,14 @@ def print_custom_event(event: dict[str, Any]) -> None:
     if event_type == "intent_decision":
         render_intent_decision(event)
         return
-    if event_type == "chat_response":
-        render_chat_response(event)
+    if event_type == "peer_reply":
+        render_peer_reply(event)
+        return
+    if event_type == "human_request_recorded":
+        render_human_request_recorded(event)
+        return
+    if event_type == "workspace_note":
+        render_workspace_note(event)
         return
     if event_type == "problem_decision":
         render_problem_decision(event)
@@ -143,21 +149,38 @@ def print_custom_event(event: dict[str, Any]) -> None:
 
 
 def render_intent_decision(event: dict[str, Any]) -> None:
+    intent = event.get("intent", "")
     lines = [
-        f"route: {event.get('route', '')}",
-        f"confidence: {event.get('confidence', 0)}",
+        f"intent: {intent or '(unknown)'}",
+        f"target: {event.get('target', '') or '(none)'}",
+        f"plan_action: {event.get('plan_action', '') or '(none)'}",
         f"reason: {_shorten(event.get('reason', ''), 600)}",
     ]
-    style = "cyan" if event.get("route") == "chat" else "magenta"
+    raw = event.get("raw_text")
+    if raw:
+        lines.append(f"raw_text: {_shorten(raw, 400)}")
+    style = "cyan" if intent == "chat" else "magenta"
     console.print(Panel("\n".join(lines), title="Intent Router", border_style=style, box=box.ROUNDED))
 
 
-def render_chat_response(event: dict[str, Any]) -> None:
-    lines = [_shorten(event.get("response", ""), 1600)]
-    reason = event.get("reason")
-    if reason:
-        lines.append(f"\nmode: {event.get('mode', 'lightweight')} | reason: {reason}")
-    console.print(Panel("\n".join(lines), title="RealModelize", border_style="cyan", box=box.ROUNDED))
+def render_peer_reply(event: dict[str, Any]) -> None:
+    lines = [
+        f"agent: {event.get('agent', '')}",
+        f"content: {_shorten(event.get('content', ''), 1600)}",
+    ]
+    console.print(Panel("\n".join(lines), title="Peer Reply", border_style="cyan", box=box.ROUNDED))
+
+
+def render_human_request_recorded(event: dict[str, Any]) -> None:
+    console.print(Panel(str(event.get("path", "")), title="Human Request Recorded", border_style="blue", box=box.ROUNDED))
+
+
+def render_workspace_note(event: dict[str, Any]) -> None:
+    lines = [
+        f"node: {event.get('node', '')}",
+        f"detail: {_shorten(event.get('detail', ''), 900)}",
+    ]
+    console.print(Panel("\n".join(lines), title="Workspace Note", border_style="yellow", box=box.ROUNDED))
 
 
 def render_problem_decision(event: dict[str, Any]) -> None:
@@ -280,14 +303,8 @@ def print_graph_event(payload: dict[str, Any]) -> None:
                 render_modeler_plan(update.get("modeler_plan"))
             if update.get("figures"):
                 render_figures(update.get("figures"))
-        elif node in {"actor", "codeAgent"}:
-            summary = update.get("code_agent_summary") or update.get("last_actor_summary")
-            if summary:
-                console.print(Panel(_shorten(summary, 1200), title="codeAgent Summary", border_style="cyan"))
         elif node == "verifier":
             render_verifier(update)
-        elif node == "memory_snapshot":
-            render_memory_snapshot(update)
         elif node == "context_monitor":
             render_context_monitor(update)
         elif node == "context_compressor":

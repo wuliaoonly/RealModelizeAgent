@@ -73,7 +73,7 @@ def main(
     ] = None,
     max_attempts: Annotated[
         int,
-        typer.Option("--max-attempts", help="planner/actor/verifier 最大尝试次数。"),
+        typer.Option("--max-attempts", help="工作流 verifier 最大尝试次数。"),
     ] = 3,
     approval_mode: Annotated[
         Literal["inline", "auto", "deny"],
@@ -131,7 +131,7 @@ def tui(
     ] = None,
     max_attempts: Annotated[
         int,
-        typer.Option("--max-attempts", help="planner/actor/verifier 最大尝试次数。"),
+        typer.Option("--max-attempts", help="工作流 verifier 最大尝试次数。"),
     ] = 3,
     approval_mode: Annotated[
         Literal["inline", "auto", "deny"],

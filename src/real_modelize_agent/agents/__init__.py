@@ -6,7 +6,6 @@ from real_modelize_agent.agents.research_agent import run_research_agent
 from real_modelize_agent.agents.write_agent import (
     build_latex_command,
     paper_status,
-    parse_latex_errors,
     run_writer_agent,
 )
 
@@ -16,6 +15,5 @@ __all__ = [
     "run_writer_agent",
     "run_research_agent",
     "build_latex_command",
-    "parse_latex_errors",
     "paper_status",
 ]
