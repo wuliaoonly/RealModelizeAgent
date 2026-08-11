@@ -9,8 +9,10 @@ from typing import Any, Callable
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from real_modelize_agent.agents.artifacts import collect_figures, collect_problem_artifacts, has_real_solutions
+from real_modelize_agent.agents.subagent_workspace import record_agent_work
 from real_modelize_agent.core.state import RuntimeState
 from real_modelize_agent.core.figure_style import audit_figure_workspace, load_figure_style, save_figure_style
+from real_modelize_agent.core.work_modes import CodeWorkType, resolve_code_work_type
 from real_modelize_agent.graph.memory import build_layered_memory, format_layered_memory_for_prompt, memory_event
 from real_modelize_agent.graph.state import RealModelizeGraphState
 from real_modelize_agent.prompts.code_figure import CODER_PROMPT, CODER_PROMPT_SHORT
@@ -34,13 +36,24 @@ def run_coder_agent(
     runtime = state["runtime"]
     todos = [dict(todo) for todo in state.get("todos", [])]
     writer = writer or (lambda _: None)
-    style_request = dict(state.get("chart_style_request", {}) or {})
-    style_info = save_figure_style(runtime.workspace, style_request)
-    writer({"type": "human_review", "node": "coderAgent", "phase": "style_applied", **style_info})
+    work_type = resolve_code_work_type(instruction, state)
+    work_record = record_agent_work(
+        runtime.workspace,
+        "coderAgent",
+        "running",
+        f"{work_type.value} work",
+        instruction,
+    )
+    writer({"type": "work_mode", "node": "coderAgent", "work_type": work_type.value, "record": work_record["path"]})
+    if work_type is CodeWorkType.FIGURE:
+        style_request = dict(state.get("chart_style_request", {}) or {})
+        style_info = save_figure_style(runtime.workspace, style_request)
+        writer({"type": "human_review", "node": "coderAgent", "phase": "style_applied", **style_info})
     memory = build_layered_memory({**state, "todos": todos}, node="coderAgent")
     writer(memory_event(memory, node="coderAgent"))
     model = create_model()
-    coder = model.bind_tools(build_coder_tools(runtime, todos))
+    tools = build_coder_tools(runtime, todos, work_type)
+    coder = model.bind_tools(tools)
 
     writer(
         {
@@ -56,10 +69,22 @@ def run_coder_agent(
     # 否则系统会被占位脚本卡在修补模式，永远不生成真正的逐问实现。
     has_solutions = has_real_solutions(runtime.workspace, state.get("problem_json"))
     system_prompt = CODER_PROMPT if not has_solutions else CODER_PROMPT_SHORT
+    if work_type is CodeWorkType.MODEL:
+        system_prompt += (
+            "\n\n# 当前状态覆盖：MODEL WORK\n"
+            "本轮只验收数据处理、模型实现、执行记录、指标和 evidence.json。"
+            "上文所有强制调用 FigureStyleReadTool/FigureAuditTool 的要求在本状态暂停；这些工具不会提供。"
+        )
+    else:
+        system_prompt += (
+            "\n\n# 当前状态覆盖：FIGURE WORK\n"
+            "本轮只读取已固化的结果/evidence 并实现或修正可视化；不得改变模型、参数、指标或结论数值。"
+            "必须以 FigureAuditTool 通过作为完成条件。"
+        )
 
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=_coder_input(state, instruction, memory)),
+        HumanMessage(content=_coder_input(state, instruction, memory, work_type)),
     ]
     produced_messages: list[Any] = []
     tool_events: list[dict[str, Any]] = []
@@ -73,7 +98,7 @@ def run_coder_agent(
             break
         for call in tool_calls:
             writer({"type": "tool_call", "node": "coderAgent", "name": call.get("name"), "args": call.get("args", {})})
-            tool_result, todos = _execute_coder_tool(runtime, todos, call)
+            tool_result, todos = _execute_coder_tool(runtime, todos, call, tools)
             event = _tool_result_event(tool_result, node="coderAgent")
             tool_events.append(event)
             writer(event)
@@ -92,10 +117,17 @@ def run_coder_agent(
 
     summary = _last_ai_content(produced_messages)
     figures = collect_figures(runtime.workspace)
-    figure_audit = audit_figure_workspace(runtime.workspace)
-    writer({"type": "figure_check", "node": "coderAgent", "passed": figure_audit["ok"], "detail": figure_audit})
+    if work_type is CodeWorkType.FIGURE:
+        figure_audit = audit_figure_workspace(runtime.workspace)
+        writer({"type": "figure_check", "node": "coderAgent", "passed": figure_audit["ok"], "detail": figure_audit})
+        ok = bool(figure_audit["ok"])
+    else:
+        figure_audit = {"ok": True, "skipped": True, "reason": "model work uses result/evidence checks, not figure audit"}
+        ok = True
+    record_agent_work(runtime.workspace, "coderAgent", "complete" if ok else "needs_revision", summary, work_type.value)
     return {
-        "ok": figure_audit["ok"],
+        "ok": ok,
+        "work_type": work_type.value,
         "summary": summary,
         "todos": todos or state.get("todos", []),
         "figures": figures,
@@ -107,7 +139,12 @@ def run_coder_agent(
     }
 
 
-def _execute_coder_tool(runtime: RuntimeState, todos: list[dict[str, str]], call: dict[str, Any]):
+def _execute_coder_tool(
+    runtime: RuntimeState,
+    todos: list[dict[str, str]],
+    call: dict[str, Any],
+    tools: list[Any] | None = None,
+):
     name = call.get("name", "")
     args = call.get("args") or {}
     if name == "TodoUpdateTool":
@@ -115,8 +152,8 @@ def _execute_coder_tool(runtime: RuntimeState, todos: list[dict[str, str]], call
         if result.get("ok"):
             todos = result["todos"]
     else:
-        tools = {tool.name: tool for tool in build_coder_tools(runtime, todos)}
-        tool = tools.get(name)
+        tool_map = {tool.name: tool for tool in (tools or build_coder_tools(runtime, todos))}
+        tool = tool_map.get(name)
         if tool is None:
             result = {"ok": False, "error": f"unknown tool: {name}"}
         else:
@@ -195,11 +232,17 @@ def _plan_summary(modeler_plan: Any, target: str | None) -> str:
     return joined or str(plan)[:600]
 
 
-def _coder_input(state: RealModelizeGraphState, instruction: str, memory: dict[str, Any]) -> str:
+def _coder_input(
+    state: RealModelizeGraphState,
+    instruction: str,
+    memory: dict[str, Any],
+    work_type: CodeWorkType = CodeWorkType.MODEL,
+) -> str:
     target = _detect_target_problem(instruction, state.get("problem_json"))
     parts = [
         f"题目:\n{state['task']}",
         f"planner 指令:\n{instruction}",
+        f"当前工作状态: {work_type.value} work",
     ]
     if state.get("problem_json"):
         parts.append("结构化的题目信息（含 ques_count）:\n" + json.dumps(state["problem_json"], ensure_ascii=False))
@@ -218,15 +261,20 @@ def _coder_input(state: RealModelizeGraphState, instruction: str, memory: dict[s
         parts.append(
             f"研究资料路径（需要时用 FileReadTool 按需读取，不要把全文搬进上下文）: {state['research_path']}"
         )
-    parts.append(
-        "人工确认的图表样式（必须逐项执行）:\n"
-        + json.dumps(load_figure_style(state["runtime"].workspace), ensure_ascii=False, indent=2)
-    )
-    parts.append(
-        "所有绘图入口必须先调用 `real_modelize_agent.core.figure_style.apply_matplotlib_style(style)`；"
-        "先用 FigureStyleReadTool 读取 style，再按其中 fontsize 与 palette 绘图，最后必须调用 FigureAuditTool。"
-        "若审计未通过，修改源代码并重跑，不能宣称完成。"
-    )
+    if work_type is CodeWorkType.FIGURE:
+        parts.append(
+            "人工确认的图表样式（必须逐项执行）:\n"
+            + json.dumps(load_figure_style(state["runtime"].workspace), ensure_ascii=False, indent=2)
+        )
+        parts.append(
+            "Figure work：只处理可视化。先读 evidence/结果与现有绘图脚本；所有绘图入口先调用 "
+            "`apply_matplotlib_style(style)`，用 FigureStyleReadTool 读取样式，最终调用 FigureAuditTool。"
+        )
+    else:
+        parts.append(
+            "Model work：集中处理数据读取、EDA、模型实现、求解、指标与 evidence.json。"
+            "本状态没有 FigureStyleReadTool/FigureAuditTool；不要把出图美化当作完成条件。"
+        )
     parts.append(
         "预算分配：把精力花在真实数据的模型拟合与结果正确性上。自检/验证类脚本（*_selfcheck.py 等）可选，"
         "不要为验证而额外造脚本；除非结果异常需要定位，否则不写独立自检入口。"

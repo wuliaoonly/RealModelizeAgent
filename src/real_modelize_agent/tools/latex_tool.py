@@ -22,15 +22,16 @@ def latex_source_fingerprint(workspace: Path, tex_name: str = "论文.tex") -> s
     """Hash every source that can change the rendered paper."""
     workspace = workspace.resolve()
     candidates: set[Path] = set()
+    tex = (workspace / tex_name).resolve()
+    source_root = tex.parent if tex.is_file() else workspace
     for pattern in ("*.tex", "*.bib"):
-        candidates.update(path for path in workspace.glob(pattern) if path.is_file())
-    tex = workspace / tex_name
+        candidates.update(path for path in source_root.rglob(pattern) if path.is_file())
     for source in list(candidates):
         if source.suffix.lower() != ".tex":
             continue
         text = source.read_text(encoding="utf-8", errors="replace")
         for ref in INCLUDEGRAPHICS_RE.findall(text):
-            candidate = (workspace / ref.strip()).resolve()
+            candidate = (source.parent / ref.strip()).resolve()
             if candidate == workspace or workspace in candidate.parents:
                 if candidate.is_file():
                     candidates.add(candidate)
@@ -59,9 +60,9 @@ def compile_latex(
     executable = shutil.which(selected)
     if executable is None:
         return {"ok": False, "error": f"LaTeX engine not found: {selected}"}
-    tex = workspace / tex_name
-    if not tex.is_file() or tex.parent.resolve() != workspace:
-        return {"ok": False, "error": f"paper source must be a root workspace file: {tex_name}"}
+    tex = (workspace / tex_name).resolve()
+    if not tex.is_file() or (tex != workspace and workspace not in tex.parents):
+        return {"ok": False, "error": f"paper source must stay inside workspace: {tex_name}"}
     passes = max(1, min(3, int(passes)))
     pdf = tex.with_suffix(".pdf")
     if pdf.exists():
@@ -72,7 +73,7 @@ def compile_latex(
         try:
             completed = subprocess.run(
                 [executable, "-interaction=nonstopmode", "-halt-on-error", tex.name],
-                cwd=workspace,
+                cwd=tex.parent,
                 shell=False,
                 capture_output=True,
                 timeout=timeout_seconds,
@@ -111,9 +112,9 @@ def compile_latex(
         "version": 1,
         "compiled_at": datetime.now(timezone.utc).isoformat(),
         "engine": selected,
-        "tex": tex.name,
-        "pdf": pdf.name if pdf.exists() else "",
-        "source_fingerprint": latex_source_fingerprint(workspace, tex.name),
+        "tex": tex.relative_to(workspace).as_posix(),
+        "pdf": pdf.relative_to(workspace).as_posix() if pdf.exists() else "",
+        "source_fingerprint": latex_source_fingerprint(workspace, tex.relative_to(workspace).as_posix()),
         "ok": ok,
         "fatal_errors": fatal_errors,
         "unresolved_references": unresolved,
@@ -128,12 +129,12 @@ def compile_latex(
 
 def latex_compile_status(workspace: Path, tex_name: str = "论文.tex") -> dict[str, Any]:
     workspace = workspace.resolve()
-    tex = workspace / tex_name
+    tex = (workspace / tex_name).resolve()
     pdf = tex.with_suffix(".pdf")
     status_path = workspace / STATUS_FILE
     base = {
-        "paper_tex": tex.name if tex.exists() else "",
-        "paper_pdf": pdf.name if pdf.exists() else "",
+        "paper_tex": tex.relative_to(workspace).as_posix() if tex.exists() else "",
+        "paper_pdf": pdf.relative_to(workspace).as_posix() if pdf.exists() else "",
         "compile_ok": False,
         "tex_chars": len(tex.read_text(encoding="utf-8", errors="replace")) if tex.exists() else 0,
         "compile_record": STATUS_FILE.as_posix() if status_path.exists() else "",
@@ -145,10 +146,13 @@ def latex_compile_status(workspace: Path, tex_name: str = "论文.tex") -> dict[
         record = json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {**base, "compile_detail": "invalid compile record"}
-    current_fingerprint = latex_source_fingerprint(workspace, tex.name)
+    current_fingerprint = latex_source_fingerprint(workspace, tex.relative_to(workspace).as_posix())
     fresh = record.get("source_fingerprint") == current_fingerprint
+    # Version-1 legacy records did not persist ``tex``.  Keep them readable;
+    # all newly produced records bind the status to an explicit source path.
+    same_source = not record.get("tex") or record.get("tex") == tex.relative_to(workspace).as_posix()
     pdf_valid = pdf.stat().st_size >= 100 and pdf.read_bytes()[:5] == b"%PDF-"
-    compile_ok = bool(record.get("ok") and fresh and pdf_valid)
+    compile_ok = bool(record.get("ok") and fresh and same_source and pdf_valid)
     detail = "verified compile" if compile_ok else "compile failed, stale, or PDF invalid"
     return {**base, "compile_ok": compile_ok, "compile_detail": detail, "record": record}
 

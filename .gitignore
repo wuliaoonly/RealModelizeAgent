@@ -33,6 +33,9 @@ tmp/
 .vscode/
 .claude/
 
+# ===== 第三方技能（不随仓库发布；推荐清单见 README「推荐技能」）=====
+skills/
+
 # ===== 系统文件 =====
 .DS_Store
 Thumbs.db

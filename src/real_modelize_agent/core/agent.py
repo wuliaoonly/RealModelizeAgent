@@ -79,6 +79,7 @@ def stream_agent_events(
         yield {"type": "graph_event", "event": {"chat": {"final_answer": result["final_answer"], "user_intent": "chat"}}}
         return
 
+    detected_problem_json: dict[str, Any] = {}
     if resume_path is None:
         detected = False
         entry_state: dict[str, Any] = {"task": task or "", "messages": []}
@@ -87,6 +88,7 @@ def stream_agent_events(
                 yield {"type": "custom_event", "event": event}
                 if isinstance(event, dict) and event.get("type") == "problem_decision":
                     detected = bool(event.get("detected"))
+                    detected_problem_json = dict(event.get("problem_json") or {})
             else:
                 _merge_graph_update(entry_state, event)
                 yield {"type": "graph_event", "event": event}
@@ -126,6 +128,11 @@ def stream_agent_events(
             "messages": [],
             "attempts": 0,
             "max_attempts": max_attempts,
+            "problem_json": detected_problem_json,
+            "stage": "prepare",
+            "stage_attempts": {},
+            "stage_verifications": {},
+            "stage_history": [],
         }
 
     inputs["user_intent"] = decision.intent

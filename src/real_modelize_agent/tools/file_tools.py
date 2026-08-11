@@ -67,7 +67,7 @@ def coder_writable(state: RuntimeState, path: Path) -> bool:
     except ValueError:
         return False
     parts = rel.parts
-    return bool(parts) and (parts[0] in ("tmp", "utils") or "代码" in parts)
+    return bool(parts) and (parts[0] in ("tmp", "util", "utils") or "代码" in parts)
 
 
 def coder_write_file(state: RuntimeState, file_path: str, content: str) -> dict[str, Any]:

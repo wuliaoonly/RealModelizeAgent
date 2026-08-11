@@ -5,9 +5,15 @@ import os
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
 from real_modelize_agent.agents.artifacts import collect_problem_artifacts, ensure_problem_folders, research_path
 from real_modelize_agent.agents.handoffs import make_coder_handoff_tool, make_research_handoff_tool
+from real_modelize_agent.agents.subagent_workspace import (
+    dispatch_parallel_drafts,
+    read_workspace_context,
+    record_agent_work,
+)
 from real_modelize_agent.graph.memory import build_layered_memory, format_layered_memory_for_prompt, memory_event
 from real_modelize_agent.graph.state import RealModelizeGraphState
 from real_modelize_agent.prompts.model import MODELER_PROMPT, MODELER_PROMPT_SHORT
@@ -20,6 +26,7 @@ Writer = Callable[[dict[str, Any]], None]
 
 PLAN_ANALYSIS_FILE = "题目分析.md"
 PLAN_JSON_FILE = "建模方案.json"
+PLAN_MARKDOWN_FILE = "建模方案.md"
 
 
 def run_modeler_agent(
@@ -40,13 +47,13 @@ def run_modeler_agent(
     memory = build_layered_memory(state, node="modelerAgent")
     writer(memory_event(memory, node="modelerAgent"))
     model = create_model()
-    tools = build_modeler_tools(runtime) + [
+    tools = build_modeler_tools(runtime) + _model_subagent_tools(state, writer) + [
         make_research_handoff_tool(state, writer, from_agent="modelerAgent"),
         make_coder_handoff_tool(state, writer, from_agent="modelerAgent"),
     ]
     modeler = model.bind_tools(tools)
 
-    first_run = not (runtime.workspace / PLAN_ANALYSIS_FILE).exists() or not (runtime.workspace / PLAN_JSON_FILE).exists()
+    first_run = not (runtime.workspace / PLAN_ANALYSIS_FILE).exists() or not (runtime.workspace / PLAN_MARKDOWN_FILE).exists()
     ensure_problem_folders(runtime.workspace, state.get("problem_json"))
     system_prompt = MODELER_PROMPT if first_run else MODELER_PROMPT_SHORT
 
@@ -76,7 +83,7 @@ def run_modeler_agent(
         produced_messages.append(AIMessage(content="modelerAgent stopped after the maximum tool loop count."))
 
     summary = _last_ai_content(produced_messages)
-    plan_path = PLAN_JSON_FILE if (runtime.workspace / PLAN_JSON_FILE).exists() else ""
+    plan_path = PLAN_MARKDOWN_FILE if (runtime.workspace / PLAN_MARKDOWN_FILE).exists() else ""
     analysis_path = PLAN_ANALYSIS_FILE if (runtime.workspace / PLAN_ANALYSIS_FILE).exists() else ""
     return {
         "ok": True,
@@ -143,8 +150,15 @@ def _modeler_input(state: RealModelizeGraphState, instruction: str, memory: dict
         )
     parts.append("分层记忆快照:\n" + format_layered_memory_for_prompt(memory))
     parts.append(
-        "两阶段执行：阶段1 需要资料先调 CallResearchAgentTool 再写 `题目分析.md`、`建模方案.json` 与每问 "
-        "`problemN/方案/问题N_方案.md`，并追加 NOTEPAD.md；阶段2 调 CallCoderAgentTool 实现，读结果核验，不达标改进模型再调。"
+        "两阶段执行：Analysis Stage 需要资料先调 CallResearchAgentTool，再写 `题目分析.md`、`建模方案.md`、"
+        "`术语符号表.md`、每问 `problemN/方案/{方案.md,模型公式.md}` 与敏感性方案；Code Stage 审查代码与结果，"
+        "不达标则调 CallCoderAgentTool 返工，固化后写 `建模结果.md`。每轮追加 NOTEPAD.md。"
+    )
+    parts.append(
+        "主建模手并行协议：开始/阶段切换时先用 RecordModelWorkTool 把当前进度记录到 tmp。"
+        "当存在多个独立问题时，用 DispatchModelSubagentsTool 为每问并行生成分析草稿；"
+        "子代理草稿只在 tmp/agents/modelerAgent/，主建模手必须逐份 FileRead、消解跨问符号/假设冲突后，"
+        "再统一写入正式建模方案，不能直接把草稿当最终产物。"
     )
     parts.append(
         "[可用技能]\nXlsxReadTool：只读预览 .xlsx/.xlsm 赛题附件（工作表清单、表头、前几行样例），"
@@ -154,7 +168,7 @@ def _modeler_input(state: RealModelizeGraphState, instruction: str, memory: dict
         "[算法资料库]\n"
         "项目根 `assets/` 的 7 类算法文档已可读（FileReadTool/GrepTool 现在能读项目根）。"
         "选算法/写方案前：用 FileReadTool 读对应 0X-*.md（大文件用 offset/limit 分段），或 GrepTool 按算法名/关键词搜章节，"
-        "把算法原理、适用范围与公式写进 `建模方案.json` 与 `problemN/方案/问题N_方案.md`。\n"
+        "把算法原理、适用范围与公式写进 `建模方案.md` 与 `problemN/方案/{方案.md,模型公式.md}`。\n"
         + load_algorithm_briefing()
     )
     return "\n\n".join(parts)
@@ -168,3 +182,74 @@ def _last_ai_content(messages: list[Any]) -> str:
         if content:
             return str(content)
     return ""
+
+
+def _model_subagent_tools(state: RealModelizeGraphState, writer: Writer) -> list[StructuredTool]:
+    runtime = state["runtime"]
+
+    def record_work(status: str, summary: str, details: str = "") -> dict[str, Any]:
+        return record_agent_work(runtime.workspace, "modelerAgent", status, summary, details)
+
+    def dispatch(assignments: dict[str, str] | None = None) -> dict[str, Any]:
+        selected = assignments or _default_model_assignments(state)
+
+        def worker(name: str, task: str) -> str:
+            files = [
+                "raw/题目.md",
+                str(state.get("research_path", "")),
+                "建模方案.md",
+                f"{name}/方案/方案.md",
+                f"{name}/方案/模型公式.md",
+            ]
+            context = {
+                "problem_json": state.get("problem_json", {}),
+                "research_path": state.get("research_path", ""),
+                "problem_artifacts": state.get("problem_artifacts", {}).get(name, {}),
+                "source_text": read_workspace_context(runtime.workspace, files),
+            }
+            response = create_model().invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "你是建模子代理，只负责一个问题的独立技术草稿。提出假设、变量、公式、算法、"
+                            "校验与风险；不得写正式工作区文件，也不得声称代表总方案。"
+                        )
+                    ),
+                    HumanMessage(
+                        content=f"子任务={name}\n要求={task}\n共享上下文={json.dumps(context, ensure_ascii=False)}"
+                    ),
+                ]
+            )
+            return str(getattr(response, "content", ""))
+
+        result = dispatch_parallel_drafts(runtime.workspace, "modelerAgent", selected, worker)
+        writer({"type": "subagent_batch", "node": "modelerAgent", **result})
+        return result
+
+    return [
+        StructuredTool.from_function(
+            name="RecordModelWorkTool",
+            func=record_work,
+            description="Record the main model agent's current status/summary/details under tmp/agents/modelerAgent.",
+        ),
+        StructuredTool.from_function(
+            name="DispatchModelSubagentsTool",
+            func=dispatch,
+            description=(
+                "Run one independent model-drafting sub-agent per problem concurrently. Optional assignments is a "
+                "mapping like {'problem1':'analyze question 1'}. Drafts and manifest are written only under tmp."
+            ),
+        ),
+    ]
+
+
+def _default_model_assignments(state: RealModelizeGraphState) -> dict[str, str]:
+    problem_json = state.get("problem_json") or {}
+    try:
+        count = max(1, min(16, int(problem_json.get("ques_count", 1))))
+    except (TypeError, ValueError):
+        count = 1
+    return {
+        f"problem{index}": str(problem_json.get(f"ques{index}") or f"分析并设计问题 {index} 的模型")
+        for index in range(1, count + 1)
+    }

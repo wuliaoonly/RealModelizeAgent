@@ -23,6 +23,8 @@ from real_modelize_agent.tools.paper_search.paper_search_tool import build_paper
 from real_modelize_agent.tools.docx.docx_tool import build_docx_convert_tool, build_docx_read_tool
 from real_modelize_agent.tools.pdf.pdf_tool import build_pdf_read_tool
 from real_modelize_agent.tools.xlsx.xlsx_tool import build_xlsx_read_tool
+from real_modelize_agent.core.stages import verify_stage
+from real_modelize_agent.core.work_modes import CodeWorkType
 
 
 def build_tools(state: RuntimeState) -> list[StructuredTool]:
@@ -100,9 +102,13 @@ def build_read_only_tools(state: RuntimeState) -> list[StructuredTool]:
     ]
 
 
-def build_verifier_tools(state: RuntimeState, problem_json: dict | None = None) -> list[StructuredTool]:
+def build_verifier_tools(
+    state: RuntimeState,
+    problem_json: dict | None = None,
+    stage: str | None = None,
+) -> list[StructuredTool]:
     """Read-only verifier tools plus deterministic validators; no generic shell."""
-    return build_read_only_tools(state) + [
+    tools = build_read_only_tools(state) + [
         StructuredTool.from_function(
             name="WorkspaceValidationTool",
             func=lambda: validate_workspace(state.workspace, problem_json),
@@ -114,6 +120,18 @@ def build_verifier_tools(state: RuntimeState, problem_json: dict | None = None) 
             description="Read the verified LaTeX compile record and source-freshness status.",
         ),
     ]
+    if stage:
+        tools.append(
+            StructuredTool.from_function(
+                name="StageCompletenessTool",
+                func=lambda: verify_stage(state.workspace, stage, problem_json),
+                description=(
+                    "Check only whether every file required by the current stage exists and is non-empty. "
+                    "It never evaluates scientific correctness or writing quality."
+                ),
+            )
+        )
+    return tools
 
 
 def build_modeler_tools(state: RuntimeState) -> list[StructuredTool]:
@@ -150,9 +168,18 @@ def build_modeler_tools(state: RuntimeState) -> list[StructuredTool]:
     ]
 
 
-def build_coder_tools(state: RuntimeState, todos: list[dict[str, str]] | None = None) -> list[StructuredTool]:
-    """编程手：全工具 + TodoUpdate；写权限受限——FileWrite/Edit 仅允许 `*/代码/` 与 `tmp/`，读取不受限。"""
-    return [
+def build_coder_tools(
+    state: RuntimeState,
+    todos: list[dict[str, str]] | None = None,
+    work_type: CodeWorkType | str = CodeWorkType.MODEL,
+) -> list[StructuredTool]:
+    """Build the least-privilege tool set for model work or figure work.
+
+    Both modes may edit solver/plot scripts and execute them. Model work gets
+    spreadsheet inspection, while figure work gets style and image-audit tools.
+    """
+    selected = CodeWorkType(work_type)
+    tools = [
         StructuredTool.from_function(
             name="FileReadTool",
             func=lambda file_path, offset=0, limit=2000: read_file(state, file_path, offset, limit),
@@ -198,18 +225,25 @@ def build_coder_tools(state: RuntimeState, todos: list[dict[str, str]] | None = 
             func=lambda heading, content: append_notepad(state, heading, content),
             description="Append a durable markdown note to NOTEPAD.md. Args: heading, content.",
         ),
-        StructuredTool.from_function(
-            name="FigureStyleReadTool",
-            func=lambda: {"ok": True, "style": load_figure_style(state.workspace)},
-            description="Read the human-approved chart font sizes, CJK font fallbacks, DPI and palette.",
-        ),
-        StructuredTool.from_function(
-            name="FigureAuditTool",
-            func=lambda: audit_figure_workspace(state.workspace),
-            description="Deterministically audit solver scripts and PNG figures for CJK font setup, requested palette and image quality.",
-        ),
-        build_xlsx_read_tool(),
-    ] + [build_todo_update_tool(list(todos or []))]
+    ]
+    if selected is CodeWorkType.MODEL:
+        tools.append(build_xlsx_read_tool())
+    else:
+        tools.extend(
+            [
+                StructuredTool.from_function(
+                    name="FigureStyleReadTool",
+                    func=lambda: {"ok": True, "style": load_figure_style(state.workspace)},
+                    description="Read the human-approved chart font sizes, CJK font fallbacks, DPI and palette.",
+                ),
+                StructuredTool.from_function(
+                    name="FigureAuditTool",
+                    func=lambda: audit_figure_workspace(state.workspace),
+                    description="Audit plot scripts and PNG figures for CJK fonts, palette and image quality.",
+                ),
+            ]
+        )
+    return tools + [build_todo_update_tool(list(todos or []))]
 
 
 def build_writer_tools(state: RuntimeState, todos: list[dict[str, str]] | None = None) -> list[StructuredTool]:

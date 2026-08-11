@@ -378,7 +378,7 @@ def verifier_node(state: RealModelizeGraphState) -> dict[str, Any]:
 
 def context_monitor_node(state: RealModelizeGraphState) -> dict[str, Any]:
     writer = _get_writer()
-    token_limit = get_context_token_limit()
+    token_limit = int(state.get("context_token_limit") or get_context_token_limit())
     token_count = estimate_context_tokens(state)
     should_compress = token_count >= token_limit
     next_node = state.get("context_next_node") or "verifier"

@@ -1,130 +1,134 @@
-# RealModelizeAgent · 数学建模 Code Agent
+# RealModelizeAgent
 
-一个用 LangGraph + LangChain + Typer 构建的**数学建模 Code Agent**（Claude Code 的 mini 版）。
-输入一道数模竞赛题（CUMCM/MCM），端到端输出：
+由 Planner 统筹的数学建模竞赛多智能体系统。系统按固定 Stage 顺序完成题目预处理、资料研究、建模、代码求解、绘图和 LaTeX 论文交付；每个 Stage 只有在 Verify 确认规定文件齐全后才能进入下一阶段。
 
-- `题目分析.md`、`建模方案.json` —— 问题重述、模型选择与结构化方案总纲（建模手）
-- `problem1/`、`problem2/`… —— **每问独立目录**：方案、独立可执行代码、图表、结果与 `evidence.json`
-- `research/研究资料.md` —— 研究手真实联网检索结果（仅真实返回，禁止编造）
-- `research/参考文献.bib` —— 研究手为每条真实来源生成的 BibTeX 条目（键名 `rN`，供论文手 `\cite` 引用）
-- **`论文.tex` / `论文.pdf`** —— CUMCM 风格论文（专用 LaTeX 工具编译并记录源码指纹、退出码和日志状态）
+## 工作流
 
-工作流：`coordinator（判定数模题）→ planner（规划+全链路监督）→ 研究手/建模手 → 编程手 → 论文手 → verifier（验收循环）`，
-Agent 间自带反馈闭环：**研究手↔建模手**（资料不足再检索）、**建模手↔编程手**（结果核验不达标下发修订）、
-**论文手↔编程手**（图表轮逐问把关修图）；论文手写作轮面向全文（摘要/问题背景/问题重述/建模思路/各问求解/建模优缺点），
-按需向其他 Agent 索要素材。
+```text
+Coordinator
+  └─ Planner
+      ├─ Stage 0 Prepare  → Verify
+      ├─ Stage 1 Analysis → Research Agent ↔ Model Agent → Verify
+      ├─ Stage 2 Code     → Code Agent ↔ Model Agent     → Verify
+      └─ Stage 3 Writing  → Write Agent ↔ Code Agent     → Verify → Complete
+```
+
+Verify 只检查产物是否存在且非空，不判断模型、代码结果或论文内容是否正确。内容质量由相应专业 Agent 的内部审查闭环负责。每个 Stage 的尝试次数有上限；失败时 Planner 仅把缺失文件清单交回当前 Stage，不会越级执行。
+
+Analysis 和 Code Stage 通过门禁后，系统把上下文上限切换为 200K tokens，并将压缩摘要、重要路径和未完成事项持久化到 `NOTEPAD.md` / `HISTORY_SUMMARY.md`。
+
+## Agent 职责
+
+- Planner Agent：Stage 调度、TODO、NOTEPAD、循环中断、Agent handoff 和状态汇总。
+- Research Agent：真实资料/论文检索，输出 `research/研究资料.md` 与 `research/refs.bib`；检索不可用时明确记录，不虚构来源。
+- Model Agent：题目理解、模型与算法设计、公式/术语规范、代码方案一致性审查，可按问题并行拆分思路。
+- Code Agent：分 `code` / `figure` 两种工作状态；负责求解代码、结果证据、敏感性分析和出版级图表。
+- Write Agent：先写逐问 Markdown，再填充 `article/main.tex`，缺图时向 Code Agent 发出明确绘图请求，最后编译 PDF。
+- Verify Agent：只读、确定性地核对当前 Stage 的必需文件。
 
 ## 安装
 
-```bash
-uv sync --extra modeling --extra dev   # modeling = 编程手运行所需科学计算库
+```powershell
+uv sync --extra modeling --extra office --extra dev
 ```
 
-## 配置
-
-复制 `.env.example` 为 `.env` 并填写：
-
-```bash
-API_KEY=sk-...            # OpenAI 兼容 key（官方 / DeepSeek / 智谱 / vLLM 等）
-MODEL=gpt-4o
-BASE_URL=https://api.openai.com/v1
-TAVILY_API_KEY=           # 可选，研究手联网检索
-```
-
-Agent 行为参数用 `RMA_*` 前缀（见 `.env.example`，均有默认值），其中各 Agent 反馈闭环轮次上限：
-`RMA_MODELER_MAX_LOOPS=24`、`RMA_WRITER_MAX_LOOPS=28`、`RMA_CODER_MAX_LOOPS=14`、
-`RMA_RESEARCH_MAX_LOOPS=6`、`RMA_PLANNER_MAX_LOOPS=12`、`RMA_VERIFIER_MAX_LOOPS=10`。
+复制 `.env.example` 为 `.env` 并配置模型。联网研究需要 `TAVILY_API_KEY`；没有该变量时系统会生成带明确“未检索”声明的研究文件，不会伪造文献。
 
 ## 使用
 
-```bash
-# 一次性 Rich CLI（推荐）
-real-modelize "某市 2024 年燃气用量的预测建模，给出不同区域未来半年的用量预测"
-
-# 无 API key 预览 UI（内置脚本化事件流）
-real-modelize --dry-run "测试题目"
-
-# Textual TUI（含审批弹窗 + logo）
-real-modelize tui
-
-# 对已有工作区手动编译论文
-real-modelize compile --workspace path/to/workspace
-```
-
-常用标志：`--workspace/-w`、`--max-attempts`（默认 3）、`--approval-mode inline|auto|deny`、
-`--checkpoint-mode light|strict|off`、`--trace-mode on|off`、`--resume <workspace>`。
-
-### 人工反馈与定向修改
-
-入口会先把输入识别为 `chat`、`instruction` 或新 `task`。闲聊只汇总多个专家 Agent 的只读回复；
-已有工作区的指令交给 planner，写入现有计划或 `execution_commands` 后再委派，不会被 coordinator 当作非数模题拒绝。
+把题目 PDF、文本和 Excel/CSV 数据放入项目 `problem/`，然后运行：
 
 ```powershell
-# 修改已有工作区的全部图表：字号、中文字体回退和整体配色会写入统一样式配置并自动质检
-real-modelize --resume path/to/workspace "把图表字号设为 14，改成暖色配色并重新出图"
-
-# 只修改论文中的一个段落；writer 用章节 + 段落序号/唯一锚点精确定位，再重新编译
-real-modelize --resume path/to/workspace "修改论文中模型的评价和改进章节第 2 段，使表述更严谨"
+uv run real-modelize run "完成 problem/ 中的数学建模竞赛题"
 ```
 
-人工请求记录在 `.real-modelize/human-loop/requests.jsonl`，图表样式记录在
-`.real-modelize/human-loop/figure-style.json`。coder 的 `FigureAuditTool` 会检查中文字体配置、用户配色和 PNG 清晰度；
-writer 的 `PaperParagraphEditTool` 在目标不唯一时拒绝修改，避免误改整篇论文。
+指定工作区：
 
-## 工作区结构
-
-一次任务的工作区（默认 `.real-modelize/workspaces/workspace-*`）：
-
-```
-题目分析.md 建模方案.json 论文.tex 论文.pdf Pictures/（模板 seed）
-research/研究资料.md       # 研究手真实联网检索结果（禁止编造）
-research/参考文献.bib     # 研究手真实检索生成的 BibTeX（键名 rN，论文手转行内 thebibliography）
-problem1/                  # 每问独立目录（数量 = ques_count）
-  ├── 方案/问题1_方案.md    # 建模手：该问建模方案
-  ├── 代码/问题1_求解.py    # 编程手：该问求解脚本
-  ├── 图表/fig1_*.png       # 编程手：该问核心图（EDA/敏感性图在 problem1/图表/EDA|Sensitivity/）
-  └── 结果/                 # 结果数据 + evidence.json + execution.json
-problem2/ ...              # 依题目问数扩展
-NOTEPAD.md                # 跨 Agent 持久化笔记（图表清单 + 关键数字）
-TODO.md                   # 任务清单
-.real-modelize/           # checkpoint / trace / session
+```powershell
+uv run real-modelize run "完成该数学建模题" --workspace .real-modelize/workspaces/demo
 ```
 
-## 测试（无需 API key）
+恢复已有任务：
 
-```bash
-uv run pytest                          # 全部测试（FakeModel 假返回，不联网）
-uv run pytest -m compile               # 真实 xelatex 编译国赛模板探针 + pdflatex 兼容探针（本机需 TeX Live）
-uv run python scripts/smoke_test.py    # 端到端冒烟：脚本化模型假跑完整链路，打印 PASS/FAIL
+```powershell
+uv run real-modelize run --resume .real-modelize/workspaces/demo
 ```
 
-真实运行：配置好 `.env`（API_KEY/MODEL/BASE_URL）后，
+TUI 与无 API 演示：
 
-```bash
-real-modelize --approval-mode auto -w /tmp/my_ws "一道CUMCM题……"
+```powershell
+uv run real-modelize tui
+uv run real-modelize run --dry-run
 ```
 
-产物在工作区 `/tmp/my_ws/` 下：`题目分析.md`、`建模方案.json`、`research/研究资料.md`、
-每问 `problem1..N/{方案,代码,图表,结果}`、`论文.tex`、`论文.pdf`。
+手动编译 canonical LaTeX 工程：
 
-## 架构
-
-```
-src/real_modelize_agent/
-├── agents/       建模手 / 编程手 / 论文手 / 研究手（ReAct 循环，经 planner 工具移交）
-├── cli/          typer 入口、rich 格式化、事件摘要、基础 textual TUI
-├── core/         agent 编排流、审批、checkpoint、session、状态、路径、trace
-├── graph/        LangGraph 状态图（coordinator→planner→verifier 循环）与分层记忆
-├── prompts/      建模/绘图/写作/规划/多Agent/上下文压缩 六组提示词
-├── providers/    OpenAI 兼容模型工厂
-└── tools/        文件、shell、grep、便签、任务、网络搜索等工具注册
+```powershell
+uv run real-modelize compile --workspace .real-modelize/workspaces/demo --tex article/main.tex --engine xelatex
 ```
 
-## 可信验收与证据链
+## 标准工作区
 
-- verifier 的最终结论必须同时通过运行时确定性门禁和 LLM 语义质检；LLM 不能省略强制检查。
-- verifier 与论文手没有通用 Shell。编程手命令执行采用 allowlist、`shell=False`，拒绝管道、重定向、后台任务与 `python -c/-m`。
-- 每问入口脚本必须可独立运行。受限执行器自动写入 `problemN/结果/execution.json`，记录源码 SHA256 与退出码。
-- 每问 `evidence.json` 记录输入哈希、模型假设/单位、验证切分、泄漏控制、基线、诊断、敏感性范围依据、Figure Contract 与论文 claim。
-- `论文.pdf` 存在不代表编译成功；只有专用编译记录成功、无致命日志错误且源码指纹未变化时才算通过。
-- checkpoint Git 排除环境文件、密钥和大型二进制产物，并按节点阶段去重快照。
+```text
+workspaces/ProblemN/
+├── TODO.md
+├── NOTEPAD.md
+├── raw/
+│   ├── 题目.md
+│   └── 原始附件.*
+├── data/                         # 处理后的共享数据
+├── research/
+│   ├── 研究资料.md
+│   └── refs.bib
+├── 建模方案.md
+├── 术语符号表.md
+├── 建模结果.md
+├── util/                         # 共享代码
+├── tmp/                          # 临时/测试文件
+├── problem1/
+│   ├── 方案/{方案.md,模型公式.md}
+│   ├── 代码/{Q1.py,README.md}
+│   ├── 结果/Q1_evidence.json
+│   ├── 图表/
+│   └── 文稿.md
+├── problem_sensitivity/
+│   ├── 敏感性分析方案.md
+│   ├── 代码/{sensitivity.py,README.md}
+│   ├── 结果/sensitivity_evidence.json
+│   └── 敏感性分析文稿.md
+└── article/
+    ├── main.tex
+    ├── main.pdf
+    └── 模板依赖资源
+```
+
+`StageCompletenessTool` 的完整规则位于 `core/stages.py`。Stage 0 会完整复制预设模板，但排除 `.aux/.log/.pdf` 等旧构建产物，保证新工作区从干净的 LaTeX 工程开始。
+
+## 测试
+
+```powershell
+uv run pytest -q --basetemp=.test-tmp
+```
+
+当前测试覆盖 Stage 初始化与门禁、Agent handoff、上下文压缩、工具权限、LaTeX 编译记录、CLI/TUI 和无网络端到端假链路。
+
+## 安全边界
+
+- Model Agent 无 Bash；Research Agent 只有检索工具。
+- Code Agent 写入限制在 `*/代码/`、`util/`、`utils/` 和 `tmp/`，正式结果/图表由受限执行的求解脚本生成。
+- Write Agent 使用专用 LaTeX 编译工具，不获得通用 Shell。
+- Verify Agent 只读；Stage 门禁不调用 LLM 判定内容正确性。
+- 所有文件路径必须留在工作区，命令执行使用 allowlist 和 `shell=False`。
+
+## 推荐技能（Claude Code Skills）
+
+以下第三方 Claude Code 技能与本仓库工作流配合使用（人工写作/绘图/文献检索阶段），**不随仓库发布**——`skills/` 已加入 `.gitignore`，需要时单独安装到 Claude Code 的 skills 目录：
+
+| 技能 | 用途 |
+|---|---|
+| `humanizer-zh` | 去除文本中的 AI 生成痕迹，让论文与回复读起来更自然。 |
+| `nature-figure` | 按 Nature 系期刊标准创建/修订/审计科研图（Python matplotlib/seaborn 或 R ggplot2），含多面板、图件清单与期刊导出。 |
+| `nature-academic-search` | 多来源学术检索（PubMed/CrossRef/arXiv/Scopus/ScienceDirect）与引文核对、参考文献管理。 |
+| `academic-figure-prompt` | 为 AI 生图工具生成顶会风格学术配图提示词（框架图/架构图/流程图等）。 |
+
+它们与仓库内建工具（`tools/paper_search`、`tools/figure_style` 等）互补：内建工具由 Agent 在工作区内自动调用；技能供你在编辑器里人工介入时使用。

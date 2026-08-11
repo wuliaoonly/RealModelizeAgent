@@ -78,6 +78,10 @@ class RealModelizeGraphState(TypedDict, total=False):
     chart_style_request: dict[str, Any]
     paragraph_edit_request: dict[str, Any]
     figure_audit: dict[str, Any]
+    code_work_type: str
+    # Parent/sub-agent manifests and progress records live under tmp/agents/.
+    subagent_runs: list[dict[str, Any]]
+    work_records: list[dict[str, Any]]
     # 验证
     verification_results: list[VerificationResult]
     verification_checks: list[VerificationCheck]
@@ -122,3 +126,10 @@ class RealModelizeGraphState(TypedDict, total=False):
     session_context: str
     # 杂项
     metadata: dict[str, Any]
+    # Planner-controlled stage machine
+    stage: str
+    stage_attempts: dict[str, int]
+    stage_verifications: dict[str, dict[str, Any]]
+    stage_history: list[dict[str, Any]]
+    stage_next_node: str
+    prepare_summary: str

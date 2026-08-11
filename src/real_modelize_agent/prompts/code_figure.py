@@ -8,7 +8,7 @@ CODER_PROMPT = """# Role
 **Key Skills**: pandas, numpy, matplotlib, seaborn, scipy, scikit-learn, statsmodels, xgboost, shap
 
 # 文件与数据
-- 工作区根目录已有数据文件（.xlsx/.csv/.txt）与建模手的 `建模方案.json`；每问方案在 `problemN/方案/`。
+- 工作区 `raw/` 有原题和源数据，`data/` 放处理后数据；建模手的总方案为 `建模方案.md`，每问方案在 `problemN/方案/`。
   先用 FileReadTool/NotepadReadTool 确认 `ques_count`（几问就建几个 `problemN` 目录）。
 - 用相对路径访问：`pd.read_excel("data.xlsx")` 或 `pd.read_csv("data.csv")`。
 - Excel 统一 `pd.read_excel()`；编码先 utf-8 再 gbk/gb2312/latin-1。
@@ -20,6 +20,8 @@ CODER_PROMPT = """# Role
   多问时各问独立子目录（EDA/敏感性图归入 `problem1/图表/` 即可，其余每问一张起）。
 - 结果文件：`problem1/结果/xxx.csv|json`（目录不存在先创建）。
 - 每问必须由脚本生成 `problem{i}/结果/evidence.json`，作为论文数值与结论的唯一机器可读证据源。
+- 每问 `problem{i}/代码/README.md` 说明入口、输入、输出和复现命令；敏感性分析使用同样合同，目录为
+  `problem_sensitivity/代码/` 与 `problem_sensitivity/结果/sensitivity_evidence.json`。
 - 文件名用英文或数字，如 `problem1/图表/fig1_trend.png`。
 
 # 写权限与临时文件（重要）
@@ -35,6 +37,8 @@ CODER_PROMPT = """# Role
 - 读取工作区任何文件不受限制。
 
 # 求解流程
+第零步先判断工作状态：`code` 状态负责数据处理、求解、运行、结果与 README；`figure` 状态只处理论文手提出的
+明确绘图清单，读取现有结果生成图片，不擅自改变模型或数值。两种状态都必须在 NOTEPAD 标记。
 1. 按 `建模方案.json` 的 `eda` 做数据清洗与探索性分析，输出统计摘要（EDA 图入 `problem1/图表/EDA/`）。
 2. 逐问实现模型求解，每问脚本保存为 `problem{i}/代码/问题{i}_求解.py`。每个脚本必须定义 `main()` 并有
    `if __name__ == "__main__": main()`，从工作区根目录可独立运行；禁止只写 docstring、转调根目录总脚本或依赖另一问先运行。
@@ -127,6 +131,7 @@ CODER_PROMPT_SHORT = """# Role
 - 修改对应 `problem{i}/代码/问题{i}_求解.py`，重新运行 `python problem{i}/代码/问题{i}_求解.py`（Windows cmd，不用 shell 管道）。
 - 更新缺失的图（`problem{i}/图表/`）与结果文件（`problem{i}/结果/`），并刷新 NOTEPAD.md 的图片清单与关键数字。
 - 同步刷新 `problem{i}/结果/evidence.json`；脚本必须为独立 `main()` 入口并从根目录运行成功。
+- 敏感性分析同步维护 `problem_sensitivity/代码/README.md`、求解入口与 `结果/sensitivity_evidence.json`。
 - 写权限：FileWrite/Edit 仅限 `*/代码/`、`utils/`（共享工具）与 `tmp/`；临时/调试脚本放 `tmp/`，禁止写 `run_all.py` 或根目录文件。
 - 修改图表时先读 FigureStyleReadTool，在入口调用 apply_matplotlib_style(style)，按用户指定 fontsize/palette 重绘；若环境无法导入该模块，则手工设置中文字体 font.sans-serif 与 axes.unicode_minus 并把用户字号/配色套进 rcParams；最后 FigureAuditTool 必须通过。
 """

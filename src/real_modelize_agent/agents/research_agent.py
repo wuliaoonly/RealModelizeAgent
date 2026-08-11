@@ -44,6 +44,18 @@ def run_research_agent(
     max_loops = int(os.getenv("RMA_RESEARCH_MAX_LOOPS", str(max_loops)))
     if not os.getenv("TAVILY_API_KEY"):
         note = "researchAgent skipped: TAVILY_API_KEY not configured."
+        research_dir = state["runtime"].workspace / RESEARCH_DIR
+        research_dir.mkdir(parents=True, exist_ok=True)
+        research_file = research_dir / RESEARCH_FILE
+        if not research_file.exists():
+            research_file.write_text(
+                "# 研究资料\n\n本轮未配置联网检索凭据，未获得可核验的外部来源；禁止据此虚构文献。\n",
+                encoding="utf-8",
+            )
+        for bib_name in ("refs.bib", REFERENCES_BIB):
+            bib = research_dir / bib_name
+            if not bib.exists():
+                bib.write_text("% No verified references were retrieved in this run.\n", encoding="utf-8")
         writer({"type": "search_summary", "summary": note, "queries": [], "sources": []})
         return {
             "ok": True,
@@ -51,8 +63,8 @@ def run_research_agent(
             "queries": [],
             "sources": [],
             "skipped": True,
-            "research_path": "",
-            "references_bib": "",
+            "research_path": f"{RESEARCH_DIR}/{RESEARCH_FILE}",
+            "references_bib": f"{RESEARCH_DIR}/refs.bib",
         }
 
     model = create_model()
@@ -134,6 +146,10 @@ def run_research_agent(
         "research_path": research_path(state["runtime"].workspace),
         "references_bib": references_bib_path(state["runtime"].workspace),
     }
+    canonical_bib = state["runtime"].workspace / RESEARCH_DIR / "refs.bib"
+    legacy_bib = state["runtime"].workspace / RESEARCH_DIR / REFERENCES_BIB
+    if legacy_bib.exists():
+        canonical_bib.write_text(legacy_bib.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
     writer(
         {
             "type": "search_summary",

@@ -7,9 +7,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
 from real_modelize_agent.agents.artifacts import collect_problem_artifacts
 from real_modelize_agent.agents.handoffs import make_coder_handoff_tool, make_modeler_handoff_tool, make_research_handoff_tool
+from real_modelize_agent.agents.subagent_workspace import (
+    dispatch_parallel_drafts,
+    read_workspace_context,
+    record_agent_work,
+)
 from real_modelize_agent.core.state import RuntimeState
 from real_modelize_agent.graph.memory import build_layered_memory, format_layered_memory_for_prompt, memory_event
 from real_modelize_agent.graph.state import RealModelizeGraphState
@@ -24,6 +30,8 @@ Writer = Callable[[dict[str, Any]], None]
 
 PAPER_TEX = "论文.tex"
 PAPER_PDF = "论文.pdf"
+ARTICLE_TEX = "article/main.tex"
+ARTICLE_PDF = "article/main.pdf"
 
 
 def build_latex_command(tex_name: str, engine: str = "pdflatex") -> str:
@@ -52,7 +60,31 @@ def parse_latex_errors(log_path: Path, limit: int = 8) -> list[str]:
 
 def paper_status(workspace: Path) -> dict[str, Any]:
     """Return status only for a successful, fresh, recorded compilation."""
-    return latex_compile_status(workspace, PAPER_TEX)
+    tex_name = ARTICLE_TEX if (workspace / ARTICLE_TEX).exists() else PAPER_TEX
+    return latex_compile_status(workspace, tex_name)
+
+
+def seed_article_template(workspace: Path, template_dir: Path | None = None) -> dict[str, Any]:
+    """Seed the canonical self-contained ``article/`` LaTeX project."""
+    article = workspace / "article"
+    main = article / "main.tex"
+    if main.exists():
+        return {"ok": True, "reason": "article/main.tex 已存在，跳过 seed", "files": []}
+    template_dir = template_dir if template_dir is not None else resolve_paper_template_dir()
+    if template_dir is None or not template_dir.is_dir():
+        return {"ok": False, "reason": "未找到数模论文模板", "files": []}
+    article.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    for source in template_dir.iterdir():
+        if source.suffix.lower() in {".aux", ".bbl", ".blg", ".log", ".out", ".pdf"}:
+            continue
+        target = article / source.name
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        elif not target.exists():
+            shutil.copy2(source, target)
+        copied.append(source.name)
+    return {"ok": main.exists(), "reason": "已生成 article/ LaTeX 工程", "files": copied}
 
 
 def resolve_paper_template_dir() -> Path | None:
@@ -113,7 +145,7 @@ def run_writer_agent(
     writer: Writer | None = None,
     max_loops: int = 28,
 ) -> dict[str, Any]:
-    """论文手：写作轮（全文结构+素材索要）+ 图表轮（每问图表把关），撰写并编译 论文.pdf。
+    """论文手：写作轮（全文结构+素材索要）+ 图表轮（每问图表把关），撰写并编译 article/main.pdf。
 
     写作轮可调 CallResearchAgentTool/CallModelerAgentTool/CallCoderAgentTool 按需索要素材；
     图表轮用 PIL 逐问核对 problemN/图表/ 并驱动编程手修图。
@@ -125,7 +157,7 @@ def run_writer_agent(
     memory = build_layered_memory({**state, "todos": todos}, node="writerAgent")
     writer(memory_event(memory, node="writerAgent"))
     model = create_model()
-    tools = build_writer_tools(runtime, todos) + [
+    tools = build_writer_tools(runtime, todos) + _writer_subagent_tools(state, writer) + [
         make_research_handoff_tool(state, writer, from_agent="writerAgent"),
         make_modeler_handoff_tool(state, writer, from_agent="writerAgent"),
         make_coder_handoff_tool(state, writer, from_agent="writerAgent"),
@@ -142,7 +174,8 @@ def run_writer_agent(
         }
     )
 
-    seed_info = seed_paper_template(runtime.workspace)
+    canonical = state.get("stage") == "writing" or (runtime.workspace / ARTICLE_TEX).exists()
+    seed_info = seed_article_template(runtime.workspace) if canonical else seed_paper_template(runtime.workspace)
     if not seed_info.get("ok"):
         detail = seed_info.get("reason", "未找到数模论文模板")
         writer({"type": "workspace_note", "node": "writerAgent", "detail": detail})
@@ -249,10 +282,12 @@ def _tool_result_event(tool_message: ToolMessage, *, node: str) -> dict[str, Any
 
 def _writer_input(state: RealModelizeGraphState, instruction: str, memory: dict[str, Any]) -> str:
     engine = latex_engine()
+    tex_name = ARTICLE_TEX if (state["runtime"].workspace / ARTICLE_TEX).exists() else PAPER_TEX
+    figure_prefix = "../" if tex_name == ARTICLE_TEX else ""
     parts = [
         f"题目:\n{state['task']}",
         f"planner 指令:\n{instruction}",
-        "论文骨架：工作区根目录 `论文.tex` 已按国赛模板（数模论文模板/main.tex，XeLaTeX）生成，"
+        f"论文骨架：`{tex_name}` 已按国赛模板（XeLaTeX）生成，"
         "含完整章节结构与 `\\underline{...}` 占位。**用 FileEditTool 就地逐节填充/替换**："
         "不要重写前导，不要新建 header.tex / sections/，不要改成 pdflatex 头。",
     ]
@@ -285,7 +320,7 @@ def _writer_input(state: RealModelizeGraphState, instruction: str, memory: dict[
     parts.append("分层记忆快照:\n" + format_layered_memory_for_prompt(memory))
     parts.append(
         "[Word/PDF 技能]\n"
-        "PdfReadTool：只读提取 PDF 文本（检查 论文.pdf、阅读参考文献 PDF）。\n"
+        "PdfReadTool：只读提取 PDF 文本（检查 article/main.pdf、阅读参考文献 PDF）。\n"
         "DocxReadTool：只读提取 Word 文档文本。\n"
         "DocxConvertTool：把 Markdown 等转成 Word 版论文交付（需要时用，主交付仍是 LaTeX→PDF）。\n"
         + "\n".join(load_skill_briefing(name, max_chars=360) for name in ("pdf", "docx"))
@@ -296,7 +331,15 @@ def _writer_input(state: RealModelizeGraphState, instruction: str, memory: dict[
         "缺素材按需调 CallResearchAgentTool/CallModelerAgentTool/CallCoderAgentTool 索要。"
         "模板本身即可编译，直接就地完善各节即可；每完成 2-3 节编译一遍确认无致命错误；"
         f"图表轮逐问核对 `problem*/图表/` 与 evidence.json 达标后，调用 CompileLatexTool："
-        f"tex_name=论文.tex、engine={engine}、passes=2；必须以工具返回 ok=true 为准。"
+        f"tex_name={tex_name}、engine={engine}、passes=2；article 内引用分问图片须加 `{figure_prefix}` 前缀。"
+        "填充 LaTeX 前先写每问 problemN/文稿.md 与 problem_sensitivity/敏感性分析文稿.md；"
+        "必须以工具返回 ok=true 为准。"
+    )
+    parts.append(
+        "模块化写作协议：先用 RecordWriterWorkTool 把当前结构和完成度记录到 tmp，再用 "
+        "DispatchWritingSubagentsTool 将摘要与背景、各问题模型求解、评价推广等模块并行起草。"
+        "所有子代理草稿只写 tmp/agents/writerAgent/；主论文手必须逐份读取，统一术语、符号、引用、"
+        "数据口径与叙事顺序后才可合入 article/main.tex。子代理不得直接编辑最终论文。"
     )
     return "\n\n".join(parts)
 
@@ -309,3 +352,81 @@ def _last_ai_content(messages: list[Any]) -> str:
         if content:
             return str(content)
     return ""
+
+
+def _writer_subagent_tools(state: RealModelizeGraphState, writer: Writer) -> list[StructuredTool]:
+    runtime = state["runtime"]
+
+    def record_work(status: str, summary: str, details: str = "") -> dict[str, Any]:
+        return record_agent_work(runtime.workspace, "writerAgent", status, summary, details)
+
+    def dispatch(assignments: dict[str, str] | None = None) -> dict[str, Any]:
+        selected = assignments or _default_writer_assignments(state)
+
+        def worker(name: str, task: str) -> str:
+            artifacts = state.get("problem_artifacts", {}).get(name, {})
+            artifact_paths = [
+                str(path)
+                for group in artifacts.values()
+                if isinstance(group, list)
+                for path in group
+                if str(path).lower().endswith((".md", ".json", ".csv"))
+            ]
+            files = ["建模方案.md", "术语符号表.md", str(state.get("references_bib", "")), *artifact_paths]
+            context = {
+                "task": state.get("task", "")[:3000],
+                "problem_json": state.get("problem_json", {}),
+                "modeler_plan": state.get("modeler_plan", {}),
+                "module_artifacts": artifacts,
+                "references_bib": state.get("references_bib", ""),
+                "source_text": read_workspace_context(runtime.workspace, files),
+            }
+            response = create_model().invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "你是数模论文写作子代理，只起草被分配的一个模块。内容必须以给定证据为准，"
+                            "保留待主论文手统一的符号/交叉引用标记；不得编造数值或文献，不得编辑最终论文。"
+                        )
+                    ),
+                    HumanMessage(
+                        content=f"模块={name}\n要求={task}\n共享上下文={json.dumps(context, ensure_ascii=False)}"
+                    ),
+                ]
+            )
+            return str(getattr(response, "content", ""))
+
+        result = dispatch_parallel_drafts(runtime.workspace, "writerAgent", selected, worker)
+        writer({"type": "subagent_batch", "node": "writerAgent", **result})
+        return result
+
+    return [
+        StructuredTool.from_function(
+            name="RecordWriterWorkTool",
+            func=record_work,
+            description="Record the main writer's current outline/progress under tmp/agents/writerAgent.",
+        ),
+        StructuredTool.from_function(
+            name="DispatchWritingSubagentsTool",
+            func=dispatch,
+            description=(
+                "Draft article modules concurrently. Optional assignments maps module names to writing tasks. "
+                "Every draft and manifest stays under tmp for parent review and synthesis."
+            ),
+        ),
+    ]
+
+
+def _default_writer_assignments(state: RealModelizeGraphState) -> dict[str, str]:
+    problem_json = state.get("problem_json") or {}
+    try:
+        count = max(1, min(16, int(problem_json.get("ques_count", 1))))
+    except (TypeError, ValueError):
+        count = 1
+    assignments = {
+        "front-matter": "起草摘要、关键词、问题重述、问题分析、模型假设和符号说明",
+        "evaluation": "起草模型评价、改进、推广与结论，只使用已有证据",
+    }
+    for index in range(1, count + 1):
+        assignments[f"problem{index}"] = f"起草问题 {index} 的模型建立、求解过程、结果解释与图表引用建议"
+    return assignments

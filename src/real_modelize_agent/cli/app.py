@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 from typing import Annotated, Any, Iterator, Literal
@@ -51,7 +50,7 @@ class RealModelizeGroup(TyperGroup):
 app = typer.Typer(
     cls=RealModelizeGroup,
     help=(
-        'RealModelizeAgent: 数学建模 Code Agent。使用 `real-modelize "题目"` 直接运行，'
+        'RealModelizeAgent: Planner 统筹的数学建模多智能体系统。使用 `real-modelize "题目"` 直接运行，'
         '或 `real-modelize tui` 进入 TUI，`real-modelize compile --workspace <path>` 编译论文。'
     ),
 )
@@ -73,7 +72,7 @@ def main(
     ] = None,
     max_attempts: Annotated[
         int,
-        typer.Option("--max-attempts", help="工作流 verifier 最大尝试次数。"),
+        typer.Option("--max-attempts", help="每个 Stage 的 Verify 最大尝试次数。"),
     ] = 3,
     approval_mode: Annotated[
         Literal["inline", "auto", "deny"],
@@ -106,7 +105,7 @@ def main(
         safe_echo(ctx.get_help())
         raise typer.Exit()
 
-    safe_secho("RealModelizeAgent — 数学建模 Code Agent", fg=typer.colors.MAGENTA)
+    safe_secho("RealModelizeAgent — Planner-led Modeling Agents", fg=typer.colors.MAGENTA)
     approval_handler = _inline_approval_handler if approval_mode == "inline" else None
     events = _stream_dry_run(task) if dry_run else stream_agent_events(
         task,
@@ -131,7 +130,7 @@ def tui(
     ] = None,
     max_attempts: Annotated[
         int,
-        typer.Option("--max-attempts", help="工作流 verifier 最大尝试次数。"),
+        typer.Option("--max-attempts", help="每个 Stage 的 Verify 最大尝试次数。"),
     ] = 3,
     approval_mode: Annotated[
         Literal["inline", "auto", "deny"],
@@ -169,12 +168,12 @@ def tui(
 def compile_paper(
     workspace: Annotated[
         Path,
-        typer.Option("--workspace", "-w", help="工作区路径（应包含 论文.tex）。"),
+        typer.Option("--workspace", "-w", help="工作区路径（应包含 article/main.tex）。"),
     ] = Path("."),
     tex: Annotated[
         str,
-        typer.Option("--tex", help="LaTeX 主文件名，默认 论文.tex。"),
-    ] = "论文.tex",
+        typer.Option("--tex", help="工作区内 LaTeX 主文件，默认 article/main.tex。"),
+    ] = "article/main.tex",
     engine: Annotated[
         str | None,
         typer.Option("--engine", help="LaTeX 引擎（xelatex 或 pdflatex；默认取 RMA_LATEX_ENGINE/xelatex）。"),
@@ -182,7 +181,8 @@ def compile_paper(
 ) -> None:
     """对工作区中的 LaTeX 论文跑两遍编译生成 PDF。"""
     configure_console()
-    from real_modelize_agent.agents.write_agent import build_latex_command, latex_engine
+    from real_modelize_agent.agents.write_agent import latex_engine
+    from real_modelize_agent.tools.latex_tool import compile_latex
 
     workspace = workspace.expanduser()
     if not workspace.is_dir():
@@ -193,18 +193,13 @@ def compile_paper(
         safe_secho(f"tex not found: {tex_path}", fg="red")
         raise typer.Exit(code=1)
     engine = engine or latex_engine()
-    command = build_latex_command(tex, engine)
-    for run in (1, 2):
-        safe_secho(f"run {run}: {command}", fg="cyan")
-        result = subprocess.run(command.split(), cwd=str(workspace), capture_output=True, text=True)
-        if result.returncode != 0:
-            safe_secho(f"{engine} failed (exit {result.returncode})", fg="red")
-            safe_secho(result.stderr[-1200:], fg="red")
-    pdf = workspace / (tex.rsplit(".", 1)[0] + ".pdf")
-    if pdf.exists():
-        safe_secho(f"OK: {pdf}", fg="green")
+    safe_secho(f"compile: {tex} ({engine}, 2 passes)", fg="cyan")
+    result = compile_latex(workspace, tex_name=tex, engine=engine, passes=2)
+    if result.get("ok"):
+        safe_secho(f"OK: {workspace / str(result.get('pdf', ''))}", fg="green")
     else:
-        safe_secho("FAIL: PDF not produced. See 论文.log for details.", fg="red")
+        detail = result.get("error") or result.get("fatal_errors") or "LaTeX compilation failed"
+        safe_secho(f"FAIL: {detail}", fg="red")
         raise typer.Exit(code=1)
 
 
@@ -256,7 +251,7 @@ def _stream_dry_run(task: str | None) -> Iterator[dict[str, Any]]:
             "todos": [
                 {"id": "todo-1", "content": "建模手：撰写 题目分析.md、建模方案.json 与每问 problemN/方案/", "status": "pending", "note": ""},
                 {"id": "todo-2", "content": "编程手：Python 求解并生成每问 problemN/{代码,图表,结果}", "status": "pending", "note": ""},
-                {"id": "todo-3", "content": "论文手：按国赛模板就地填充 论文.tex 并 xelatex 编译", "status": "pending", "note": ""},
+                {"id": "todo-3", "content": "论文手：按国赛模板就地填充 article/main.tex 并 xelatex 编译", "status": "pending", "note": ""},
             ],
             "verification_commands": ["python -c \"...\""],
         },
@@ -287,7 +282,7 @@ def _stream_dry_run(task: str | None) -> Iterator[dict[str, Any]]:
     }
     yield {
         "type": "custom_event",
-        "event": {"type": "paper_compile", "node": "writerAgent", "phase": "done", "status": {"paper_tex": "论文.tex", "paper_pdf": "论文.pdf", "compile_ok": True, "tex_chars": 12345}},
+        "event": {"type": "paper_compile", "node": "writerAgent", "phase": "done", "status": {"paper_tex": "article/main.tex", "paper_pdf": "article/main.pdf", "compile_ok": True, "tex_chars": 12345}},
     }
     yield {
         "type": "graph_event",
@@ -308,7 +303,7 @@ def _stream_dry_run(task: str | None) -> Iterator[dict[str, Any]]:
         "type": "graph_event",
         "event": {
             "final": {
-                "final_answer": "数模 Agent 工作流结束：PASSED\n\n计划：按 CUMCM 流程完成数模论文。\n\n论文状态：论文.tex；编译成功：是",
+                "final_answer": "数模 Agent 工作流结束：PASSED\n\n计划：按四个 Stage 完成数模论文。\n\n论文状态：article/main.tex；编译成功：是",
             }
         },
     }

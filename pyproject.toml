@@ -1,7 +1,7 @@
 [project]
 name = "real-modelize-agent"
 version = "0.1.0"
-description = "数学建模 Code Agent：建模手→编程手→论文手 端到端生成 CUMCM LaTeX 论文"
+description = "Planner 统筹的多智能体数学建模竞赛全流程系统"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
