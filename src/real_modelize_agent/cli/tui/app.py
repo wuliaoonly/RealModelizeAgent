@@ -12,7 +12,10 @@ from textual.message import Message
 from textual.widgets import Footer, Header, Input, Static
 
 from real_modelize_agent.cli.event_summary import EventSummary, shorten, summarize_event
+from real_modelize_agent.cli.tui.approval import ApprovalGate, ApprovalModal
+from real_modelize_agent.cli.tui.logo import render_logo
 from real_modelize_agent.core.agent import stream_agent_events
+from real_modelize_agent.core.approval import ApprovalDecision, ApprovalRequest
 
 StreamFactory = Callable[..., Iterable[dict[str, Any]]]
 
@@ -29,8 +32,19 @@ class RunFinishedMessage(Message):
         self.status = status
 
 
+class ApprovalRequestedMessage(Message):
+    def __init__(self, request: ApprovalRequest, gate: ApprovalGate) -> None:
+        super().__init__()
+        self.request = request
+        self.gate = gate
+
+
 class RealModelizeTuiApp(App[None]):
-    """基础 textual App：Header + 事件滚动列表 + 输入框。审批走 CLI 提示。"""
+    """基础 textual App：Header + 事件滚动列表 + 输入框 + 蓝色三角 logo。
+
+    inline 审批通过 ApprovalModal 弹窗接线：工作线程 _make_approval_handler 发
+    ApprovalRequestedMessage → 主线程 push_screen 弹窗 → 回调 resolve → 阻塞 wait 返回。
+    """
 
     CSS = """
     Screen {
@@ -137,6 +151,11 @@ class RealModelizeTuiApp(App[None]):
         color: #b7b0a8;
         padding: 0 1 1 1;
     }
+
+    .logo {
+        height: auto;
+        padding: 1 1 0 1;
+    }
     """
 
     BINDINGS = [
@@ -203,6 +222,13 @@ class RealModelizeTuiApp(App[None]):
     def on_agent_event_message(self, message: AgentEventMessage) -> None:
         self._handle_event(message.event)
 
+    def on_approval_requested_message(self, message: ApprovalRequestedMessage) -> None:
+        modal = ApprovalModal(message.request, self.latest_workspace)
+        self.push_screen(
+            modal,
+            callback=lambda approved: message.gate.resolve(bool(approved)),
+        )
+
     def on_run_finished_message(self, message: RunFinishedMessage) -> None:
         self.running = False
         self.query_one("#task-input", Input).disabled = False
@@ -245,10 +271,19 @@ class RealModelizeTuiApp(App[None]):
             name=f"rma-run-{self.run_count}",
         )
 
+    def _make_approval_handler(self) -> Callable[[ApprovalRequest], ApprovalDecision]:
+        """工作线程审批回调：发消息到主线程弹窗，阻塞等待用户决定。"""
+        def handler(request: ApprovalRequest) -> ApprovalDecision:
+            gate = ApprovalGate(request)
+            self.call_from_thread(self.post_message, ApprovalRequestedMessage(request, gate))
+            return gate.wait()
+
+        return handler
+
     def _run_stream(self, task: str) -> None:
         status = "finished"
         try:
-            approval_handler = None  # 审批走 CLI 提示（inline 时由 bash_tool 阻塞回调处理）
+            approval_handler = self._make_approval_handler() if self.approval_mode == "inline" else None
             for event in self.stream_factory(
                 task,
                 workspace=self.workspace,
@@ -283,6 +318,8 @@ class RealModelizeTuiApp(App[None]):
         self._write_summary(summary)
 
     def _write_welcome(self) -> None:
+        events = self.query_one("#events", VerticalScroll)
+        events.mount(Static(render_logo(), classes="logo"))
         self._mount_event_card(
             "RealModelizeAgent",
             "输入数学建模题目，回车开始。依次运行：建模手 → 编程手 → 论文手 → verifier。",

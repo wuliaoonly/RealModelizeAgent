@@ -8,11 +8,11 @@ from rich.text import Text
 
 
 FALLBACK_LOGO = [
-    "  <      >  ",
-    "   /\\__/\\   ",
-    "  |  ||  |  ",
-    "  |______|  ",
-    "   ||  ||   ",
+    "      /\\      ",
+    "     /  \\     ",
+    "    / ●  ● \\    ",
+    "   /   ◡   \\   ",
+    "  /_________\\  ",
 ]
 
 
@@ -117,7 +117,7 @@ def _rgb(pixel: tuple[int, int, int, int]) -> str:
 def _render_fallback_logo(lines: Iterable[str] = FALLBACK_LOGO) -> Text:
     text = Text()
     for index, line in enumerate(lines):
-        text.append(line, style="bold rgb(255,120,42)")
+        text.append(line, style="bold rgb(63,120,255)")
         if index < len(FALLBACK_LOGO) - 1:
             text.append("\n")
     return text
