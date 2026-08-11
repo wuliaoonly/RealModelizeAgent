@@ -41,6 +41,7 @@ def run_research_agent(
     """
     load_dotenv()
     writer = writer or (lambda _: None)
+    max_loops = int(os.getenv("RMA_RESEARCH_MAX_LOOPS", str(max_loops)))
     if not os.getenv("TAVILY_API_KEY"):
         note = "researchAgent skipped: TAVILY_API_KEY not configured."
         writer({"type": "search_summary", "summary": note, "queries": [], "sources": []})

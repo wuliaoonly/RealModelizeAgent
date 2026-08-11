@@ -44,7 +44,7 @@ real-modelize "某市 2024 年燃气用量的预测建模，给出不同区域�
 # 无 API key 预览 UI（内置脚本化事件流）
 real-modelize --dry-run "测试题目"
 
-# Textual TUI（基础版）
+# Textual TUI（含审批弹窗 + logo）
 real-modelize tui
 
 # 对已有工作区手动编译论文
