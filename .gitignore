@@ -27,6 +27,7 @@ __pycache__/
 *.pyc
 .uv/
 .venv/
+tmp/
 
 # ===== 本地编辑器与 Agent 配置 =====
 .vscode/

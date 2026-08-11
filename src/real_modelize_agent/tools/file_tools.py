@@ -41,6 +41,14 @@ def resolve_workspace_path(state: RuntimeState, file_path: str) -> Path:
     return state.assert_workspace_path(raw)
 
 
+def resolve_read_path(state: RuntimeState, file_path: str) -> Path:
+    """读路径解析：workspace 或项目根（含 assets/）内允许；相对路径仍以 workspace 为基。"""
+    raw = Path(_strip_workspace_prefix(file_path)).expanduser()
+    if not raw.is_absolute():
+        raw = state.workspace / raw
+    return state.assert_readable_path(raw)
+
+
 def display_path(state: RuntimeState, path: Path) -> str:
     try:
         return str(path.resolve().relative_to(state.workspace.resolve()))
@@ -102,7 +110,7 @@ def read_file(
     limit: int | str = MAX_READ_LINES,
 ) -> dict[str, Any]:
     try:
-        path = resolve_workspace_path(state, file_path)
+        path = resolve_read_path(state, file_path)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     if not path.exists():

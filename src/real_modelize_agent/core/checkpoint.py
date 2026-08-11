@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
+import stat
 import subprocess
 from dataclasses import is_dataclass, asdict
 from datetime import datetime, timezone
@@ -449,6 +451,29 @@ def workspace_manifest(workspace: Path, *, limit: int = MAX_MANIFEST_ITEMS) -> l
     return items
 
 
+def _rmtree_readonly(path: Path) -> None:
+    """shutil.rmtree 的 Windows 只读兼容版。
+
+    git 把对象文件存为只读属性，Windows 上 os.unlink 会抛 PermissionError；
+    删除前逐项清除只读位后重试。非 Windows 平台行为不变。
+    """
+    if os.name != "nt":
+        shutil.rmtree(path)
+        return
+
+    def _onerror(func, fullname, exc_info):
+        if isinstance(exc_info[1], PermissionError):
+            try:
+                os.chmod(fullname, stat.S_IWRITE)
+                func(fullname)
+                return
+            except OSError:
+                pass
+        raise exc_info[1]
+
+    shutil.rmtree(path, onerror=_onerror)
+
+
 def snapshot_workspace_git(workspace: Path, root: Path) -> tuple[str | None, str | None]:
     if shutil.which("git") is None:
         return None, "git executable not found"
@@ -462,7 +487,7 @@ def snapshot_workspace_git(workspace: Path, root: Path) -> tuple[str | None, str
     if git_dir.is_dir() and _checkpoint_history_has_excluded_paths(workspace, git_dir):
         # Security migration: exclusions do not erase already committed blobs.
         # Reinitialize only the private checkpoint repository, never workspace files.
-        shutil.rmtree(git_dir)
+        _rmtree_readonly(git_dir)
     git_dir.mkdir(parents=True, exist_ok=True)
     try:
         _git(workspace, git_dir, ["init", "-q"])

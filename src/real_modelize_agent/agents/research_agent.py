@@ -19,7 +19,8 @@ from real_modelize_agent.agents.artifacts import (
 from real_modelize_agent.graph.state import RealModelizeGraphState
 from real_modelize_agent.prompts.multiAgent import SEARCH_AGENT_PROMPT
 from real_modelize_agent.providers.openai_provider import create_model
-from real_modelize_agent.tools.web_search_tool import build_web_search_tool
+from real_modelize_agent.tools.registry import build_research_tools
+from real_modelize_agent.tools.skill_briefing import load_skill_briefing
 
 Writer = Callable[[dict[str, Any]], None]
 
@@ -54,7 +55,15 @@ def run_research_agent(
         }
 
     model = create_model()
-    search_agent = model.bind_tools([build_web_search_tool()])
+    search_tools = build_research_tools(state["runtime"])
+    search_agent = model.bind_tools(search_tools)
+    skill_notes = (
+        "\n\n[可用技能]\n"
+        "WebSearchTool：Tavily 通用联网检索（背景资料/模型方法/权威来源）。\n"
+        "PaperSearchTool：OpenAlex + AnySearch 学术论文双引擎交叉验证检索，适合找数模参考文献。\n"
+        "学术论文检索返回的扁平 results 数组与 WebSearchTool 同构，会自动进入研究资料与 参考文献.bib。\n"
+        + load_skill_briefing("paper-search")
+    )
     messages = [
         SystemMessage(content=SEARCH_AGENT_PROMPT),
         HumanMessage(
@@ -63,6 +72,7 @@ def run_research_agent(
                 f"planner 指令:\n{instruction}\n\n"
                 f"已有研究笔记:\n{state.get('research_notes', '')}\n\n"
                 "检索需要的背景资料与参考文献。每次检索结果会被自动追加到 research/研究资料.md。"
+                + skill_notes
             )
         ),
     ]
@@ -88,7 +98,7 @@ def run_research_agent(
             if query:
                 queries.append(query)
             writer({"type": "tool_call", "node": "researchAgent", "name": call.get("name"), "args": args})
-            tool_result = _execute_search_tool(call)
+            tool_result = _execute_search_tool(call, search_tools)
             event = _tool_result_event(tool_result)
             writer(event)
             parsed = _parse_tool_content(tool_result.content)
@@ -266,11 +276,12 @@ def _bib_escape(text: str) -> str:
     return text.replace("\r", " ").replace("\n", " ").replace("{", "(").replace("}", ")").replace("%", "\\%")
 
 
-def _execute_search_tool(call: dict[str, Any]) -> ToolMessage:
-    tool = build_web_search_tool()
+def _execute_search_tool(call: dict[str, Any], tools: list[Any]) -> ToolMessage:
     name = call.get("name", "")
     args = call.get("args") or {}
-    if name != tool.name:
+    tool_map = {tool.name: tool for tool in tools}
+    tool = tool_map.get(name)
+    if tool is None:
         result = {"ok": False, "error": f"unknown tool: {name}"}
     else:
         try:

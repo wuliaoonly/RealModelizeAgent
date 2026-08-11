@@ -17,6 +17,19 @@ def find_project_root(start: Path | None = None) -> Path:
     return current
 
 
+def default_read_roots(workspace: Path) -> list[Path]:
+    """项目读取根：从 workspace 向上找最近的含 pyproject.toml/.git 的项目根。
+
+    默认布局下 workspace 位于 `<项目根>/.real-modelize/workspaces/` 内，读根即项目根，
+    覆盖 assets/（算法资料库）、src/ 与 workspace 本身；外部 workspace 找不到项目根时
+    退化为仅 workspace（读范围=写范围，最保守）。
+    """
+    project = find_project_root(start=workspace)
+    if project.is_dir():
+        return [project]
+    return [workspace]
+
+
 def default_workspace(root: Path | None = None) -> Path:
     return new_task_workspace(root)
 

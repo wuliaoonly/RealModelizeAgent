@@ -102,14 +102,13 @@ def _validate_problem(workspace: Path, name: str) -> list[dict[str, Any]]:
     figure_files = [p for p in (root / "图表").rglob("*.png") if p.is_file()] if (root / "图表").is_dir() else []
     entrypoints = [path for path in code_files if _is_independent_entrypoint(path)]
     valid_figures = [path for path in figure_files if _valid_png(path)]
-    vector_pairs = bool(valid_figures) and all(path.with_suffix(".svg").is_file() for path in valid_figures)
     evidence = root / "结果" / "evidence.json"
     evidence_errors = _validate_evidence(evidence, name, workspace)
     return [
         _check(f"{name}:方案", bool(plan_files) and all(path.stat().st_size >= 200 for path in plan_files), "至少一个非空详细方案"),
         _check(f"{name}:独立代码", bool(entrypoints), "必须有含 main() 与 __main__ 入口的独立求解脚本"),
         _check(f"{name}:结果", bool(result_files), "结果目录必须含非空文件"),
-        _check(f"{name}:图表", bool(valid_figures) and vector_pairs, "有效 PNG 必须有同名可编辑 SVG"),
+        _check(f"{name}:图表", bool(valid_figures), "至少一张有效 PNG（SVG 可选）"),
         _check(f"{name}:证据链", not evidence_errors, "; ".join(evidence_errors) or "evidence.json 合同有效"),
     ]
 

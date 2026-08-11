@@ -12,7 +12,9 @@ from real_modelize_agent.graph.memory import build_layered_memory, format_layere
 from real_modelize_agent.graph.state import RealModelizeGraphState
 from real_modelize_agent.prompts.model import MODELER_PROMPT, MODELER_PROMPT_SHORT
 from real_modelize_agent.providers.openai_provider import create_model
+from real_modelize_agent.tools.algorithm_lookup import load_algorithm_briefing
 from real_modelize_agent.tools.registry import build_modeler_tools
+from real_modelize_agent.tools.skill_briefing import load_skill_briefing
 
 Writer = Callable[[dict[str, Any]], None]
 
@@ -143,6 +145,17 @@ def _modeler_input(state: RealModelizeGraphState, instruction: str, memory: dict
     parts.append(
         "两阶段执行：阶段1 需要资料先调 CallResearchAgentTool 再写 `题目分析.md`、`建模方案.json` 与每问 "
         "`problemN/方案/问题N_方案.md`，并追加 NOTEPAD.md；阶段2 调 CallCoderAgentTool 实现，读结果核验，不达标改进模型再调。"
+    )
+    parts.append(
+        "[可用技能]\nXlsxReadTool：只读预览 .xlsx/.xlsm 赛题附件（工作表清单、表头、前几行样例），"
+        "写方案前先用它了解数据结构。\n" + load_skill_briefing("xlsx")
+    )
+    parts.append(
+        "[算法资料库]\n"
+        "项目根 `assets/` 的 7 类算法文档已可读（FileReadTool/GrepTool 现在能读项目根）。"
+        "选算法/写方案前：用 FileReadTool 读对应 0X-*.md（大文件用 offset/limit 分段），或 GrepTool 按算法名/关键词搜章节，"
+        "把算法原理、适用范围与公式写进 `建模方案.json` 与 `problemN/方案/问题N_方案.md`。\n"
+        + load_algorithm_briefing()
     )
     return "\n\n".join(parts)
 

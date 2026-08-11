@@ -6,6 +6,7 @@ from typing import Callable
 
 from real_modelize_agent.core.approval import ApprovalDecision, ApprovalRequest, normalize_approval_mode
 from real_modelize_agent.core.checkpoint import normalize_checkpoint_mode
+from real_modelize_agent.core.paths import default_read_roots
 from real_modelize_agent.core.trace import normalize_trace_mode
 
 
@@ -20,6 +21,7 @@ class FileSnapshot:
 class RuntimeState:
     workspace: Path
     read_files: dict[Path, FileSnapshot] = field(default_factory=dict)
+    read_roots: list[Path] = field(default_factory=list)
     approval_mode: str = "inline"
     approval_handler: Callable[[ApprovalRequest], ApprovalDecision | bool] | None = None
     bash_default_timeout_seconds: int = 120
@@ -35,6 +37,22 @@ class RuntimeState:
         self.approval_mode = normalize_approval_mode(self.approval_mode)
         self.checkpoint_mode = normalize_checkpoint_mode(self.checkpoint_mode)
         self.trace_mode = normalize_trace_mode(self.trace_mode)
+
+    def _effective_read_roots(self) -> list[Path]:
+        """读根 = workspace 恒可读 + 显式 read_roots（若给定）；否则默认项目根。"""
+        roots = [self.workspace]
+        if self.read_roots:
+            roots.extend(self.read_roots)
+        else:
+            roots.extend(default_read_roots(self.workspace))
+        seen: set[Path] = set()
+        result: list[Path] = []
+        for root in roots:
+            resolved = root.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                result.append(resolved)
+        return result
 
     def record_read(self, path: Path, *, complete: bool) -> None:
         stat = path.stat()
@@ -54,3 +72,16 @@ class RuntimeState:
         if resolved != workspace and workspace not in resolved.parents:
             raise ValueError(f"path must stay inside workspace: {workspace}")
         return resolved
+
+    def assert_readable_path(self, path: Path) -> Path:
+        """读路径校验：workspace 或任意读根（默认项目根，含 assets/）之内才允许。
+
+        只约束"读"；写路径仍走 assert_workspace_path，仅限 workspace。
+        """
+        resolved = path.resolve()
+        for root in self._effective_read_roots():
+            if resolved == root or root in resolved.parents:
+                return resolved
+        raise ValueError(
+            f"path not inside any readable root (workspace or project root): {resolved}"
+        )

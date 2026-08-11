@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,6 +16,7 @@ from real_modelize_agent.graph.state import RealModelizeGraphState
 from real_modelize_agent.prompts.code_figure import CODER_PROMPT, CODER_PROMPT_SHORT
 from real_modelize_agent.providers.openai_provider import create_model
 from real_modelize_agent.tools.registry import build_coder_tools
+from real_modelize_agent.tools.skill_briefing import load_skill_briefing
 from real_modelize_agent.tools.todo_tool import persist_todos, update_todo
 
 Writer = Callable[[dict[str, Any]], None]
@@ -146,7 +148,55 @@ def workspace_notepad(workspace: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _detect_target_problem(instruction: str, problem_json: Any) -> str | None:
+    """从 planner 指令里识别当前要解决的问（problem1/问题1），识别不到返回 None。"""
+    match = re.search(r"(?:problem|问题)\s*([1-9]\d*)", instruction, re.IGNORECASE)
+    if match:
+        return f"problem{match.group(1)}"
+    if isinstance(problem_json, dict):
+        count = problem_json.get("ques_count")
+        if isinstance(count, int) and not isinstance(count, bool):
+            for i in range(1, count + 1):
+                title = str(problem_json.get(f"ques{i}", "") or "")
+                if title:
+                    tokens = [t for t in re.split(r"[，。；,\s]+", title)[:4] if len(t) >= 2]
+                    if any(token in instruction for token in tokens):
+                        return f"problem{i}"
+    return None
+
+
+def _plan_summary(modeler_plan: Any, target: str | None) -> str:
+    """建模方案紧凑摘要：当前问给关键公式全文，其余问一行摘要，控制上下文体积。"""
+    if isinstance(modeler_plan, str):
+        try:
+            plan = json.loads(modeler_plan)
+        except json.JSONDecodeError:
+            return modeler_plan[:600]
+    else:
+        plan = modeler_plan
+    if not isinstance(plan, dict):
+        return str(plan)[:600]
+    lines: list[str] = []
+    count = int(plan.get("ques_count", 0) or 0)
+    for i in range(1, count + 1):
+        q = plan.get(f"ques{i}")
+        if not isinstance(q, dict):
+            continue
+        pid = str(q.get("problem_id", f"problem{i}"))
+        content = str(q.get("content", ""))
+        if pid == target:
+            lines.append(f"【问题{i}（{pid}）·当前问·关键公式全文】\n{content}")
+        else:
+            head = " ".join(content.splitlines())[:160]
+            lines.append(f"问题{i}（{pid}）摘要: {head}")
+    if plan.get("eda"):
+        lines.append("EDA 计划摘要: " + " ".join(str(plan["eda"]).splitlines())[:200])
+    joined = "\n\n".join(lines)
+    return joined or str(plan)[:600]
+
+
 def _coder_input(state: RealModelizeGraphState, instruction: str, memory: dict[str, Any]) -> str:
+    target = _detect_target_problem(instruction, state.get("problem_json"))
     parts = [
         f"题目:\n{state['task']}",
         f"planner 指令:\n{instruction}",
@@ -154,13 +204,20 @@ def _coder_input(state: RealModelizeGraphState, instruction: str, memory: dict[s
     if state.get("problem_json"):
         parts.append("结构化的题目信息（含 ques_count）:\n" + json.dumps(state["problem_json"], ensure_ascii=False))
     if state.get("modeler_plan"):
-        parts.append("建模方案:\n" + json.dumps(state["modeler_plan"], ensure_ascii=False, default=str))
-    if state.get("problem_artifacts"):
-        parts.append(
-            "每问产物现状（缺的补齐）:\n" + json.dumps(state["problem_artifacts"], ensure_ascii=False, indent=2)
-        )
+        parts.append("建模方案（摘要；当前问含关键公式全文）:\n" + _plan_summary(state["modeler_plan"], target))
+    artifacts = state.get("problem_artifacts")
+    if isinstance(artifacts, dict) and artifacts:
+        if target and target in artifacts:
+            scope = {target: artifacts[target]}
+            label = f"{target} 产物现状（缺的补齐）:"
+        else:
+            scope = artifacts
+            label = "各问产物现状（缺的补齐）:"
+        parts.append(label + "\n" + json.dumps(scope, ensure_ascii=False, indent=2))
     if state.get("research_path"):
-        parts.append(f"研究资料: {state['research_path']}")
+        parts.append(
+            f"研究资料路径（需要时用 FileReadTool 按需读取，不要把全文搬进上下文）: {state['research_path']}"
+        )
     parts.append(
         "人工确认的图表样式（必须逐项执行）:\n"
         + json.dumps(load_figure_style(state["runtime"].workspace), ensure_ascii=False, indent=2)
@@ -170,10 +227,24 @@ def _coder_input(state: RealModelizeGraphState, instruction: str, memory: dict[s
         "先用 FigureStyleReadTool 读取 style，再按其中 fontsize 与 palette 绘图，最后必须调用 FigureAuditTool。"
         "若审计未通过，修改源代码并重跑，不能宣称完成。"
     )
+    parts.append(
+        "预算分配：把精力花在真实数据的模型拟合与结果正确性上。自检/验证类脚本（*_selfcheck.py 等）可选，"
+        "不要为验证而额外造脚本；除非结果异常需要定位，否则不写独立自检入口。"
+    )
+    parts.append(
+        "按需查阅：跨问细节、数据文件结构（列名/波段/入射角）、此前进展用 NotepadReadTool 读 NOTEPAD.md；"
+        "任务清单用 TodoReadTool 读 TODO.md。不要把研究资料/大文件全文复制进代码或上下文。"
+    )
     parts.append("分层记忆快照:\n" + format_layered_memory_for_prompt(memory))
     parts.append(
+        "[Office/数据技能]\n"
+        "XlsxReadTool：只读预览 .xlsx/.xlsm（工作表/表头/样例），快速了解附件结构。\n"
+        "创建/编辑 Excel、Word、PDF 时可用 BashTool 执行对应技能脚本（位置见简报）：\n"
+        + "\n".join(load_skill_briefing(name, max_chars=320) for name in ("xlsx", "docx", "pdf"))
+    )
+    parts.append(
         "请在 Windows 环境下用 python 求解：先读数据 → EDA → 逐问建模求解 → 每问产出 "
-        "可独立执行的 problem{i}/代码/问题{i}_求解.py、problem{i}/图表/*.{png,svg}、"
+        "可独立执行的 problem{i}/代码/问题{i}_求解.py、problem{i}/图表/*.png、"
         "problem{i}/结果/evidence.json 与其他结果文件。NOTEPAD 只写摘要，数值证据以 evidence.json 为准。"
         "完成后逐问运行入口脚本，再用 TodoUpdateTool 更新任务状态。"
     )

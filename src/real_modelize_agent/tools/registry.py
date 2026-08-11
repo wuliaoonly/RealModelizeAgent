@@ -18,7 +18,11 @@ from real_modelize_agent.core.figure_style import audit_figure_workspace, load_f
 from real_modelize_agent.core.validation import validate_workspace
 from real_modelize_agent.tools.paper_edit_tool import edit_paper_paragraph
 from real_modelize_agent.tools.todo_tool import build_todo_update_tool
-from real_modelize_agent.tools.web_search_tool import build_web_search_tool
+from real_modelize_agent.tools.paper_search.web_search_tool import build_web_search_tool
+from real_modelize_agent.tools.paper_search.paper_search_tool import build_paper_search_tool
+from real_modelize_agent.tools.docx.docx_tool import build_docx_convert_tool, build_docx_read_tool
+from real_modelize_agent.tools.pdf.pdf_tool import build_pdf_read_tool
+from real_modelize_agent.tools.xlsx.xlsx_tool import build_xlsx_read_tool
 
 
 def build_tools(state: RuntimeState) -> list[StructuredTool]:
@@ -26,7 +30,7 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
         StructuredTool.from_function(
             name="FileReadTool",
             func=lambda file_path, offset=0, limit=2000: read_file(state, file_path, offset, limit),
-            description="Read a UTF-8 text file inside the workspace. Supports offset and limit.",
+            description="Read a UTF-8 text file inside the workspace or the project root (e.g. assets/ algorithm library). Supports offset and limit. Writes stay workspace-only.",
         ),
         StructuredTool.from_function(
             name="FileWriteTool",
@@ -43,7 +47,7 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
             func=lambda pattern, path=".", glob=None, head_limit=50, ignore_case=False: grep(
                 state, pattern, path, glob, head_limit, ignore_case
             ),
-            description="Search workspace text files by regex pattern and return matching lines.",
+            description="Search text files by regex pattern under the workspace or project root and return matching lines.",
         ),
         StructuredTool.from_function(
             name="BashTool",
@@ -65,20 +69,28 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
     ]
 
 
+def build_research_tools(state: RuntimeState) -> list[StructuredTool]:
+    """研究手：Web 通用检索 + 学术论文双引擎检索（OpenAlex+AnySearch 交叉验证）；只读、无 Shell。"""
+    return [
+        build_web_search_tool(),
+        build_paper_search_tool(),
+    ]
+
+
 def build_read_only_tools(state: RuntimeState) -> list[StructuredTool]:
     """Strictly read-only inspection tools; intentionally excludes shell/network."""
     return [
         StructuredTool.from_function(
             name="FileReadTool",
             func=lambda file_path, offset=0, limit=2000: read_file(state, file_path, offset, limit),
-            description="Read a UTF-8 text file inside the workspace. Supports offset and limit.",
+            description="Read a UTF-8 text file inside the workspace or the project root (e.g. assets/ algorithm library). Supports offset and limit. Writes stay workspace-only.",
         ),
         StructuredTool.from_function(
             name="GrepTool",
             func=lambda pattern, path=".", glob=None, head_limit=50, ignore_case=False: grep(
                 state, pattern, path, glob, head_limit, ignore_case
             ),
-            description="Search workspace text files by regex pattern and return matching lines.",
+            description="Search text files by regex pattern under the workspace or project root and return matching lines.",
         ),
         StructuredTool.from_function(
             name="NotepadReadTool",
@@ -110,7 +122,7 @@ def build_modeler_tools(state: RuntimeState) -> list[StructuredTool]:
         StructuredTool.from_function(
             name="FileReadTool",
             func=lambda file_path, offset=0, limit=2000: read_file(state, file_path, offset, limit),
-            description="Read a UTF-8 text file inside the workspace. Supports offset and limit.",
+            description="Read a UTF-8 text file inside the workspace or the project root (e.g. assets/ algorithm library). Supports offset and limit. Writes stay workspace-only.",
         ),
         StructuredTool.from_function(
             name="FileWriteTool",
@@ -122,7 +134,7 @@ def build_modeler_tools(state: RuntimeState) -> list[StructuredTool]:
             func=lambda pattern, path=".", glob=None, head_limit=50, ignore_case=False: grep(
                 state, pattern, path, glob, head_limit, ignore_case
             ),
-            description="Search workspace text files by regex pattern and return matching lines.",
+            description="Search text files by regex pattern under the workspace or project root and return matching lines.",
         ),
         StructuredTool.from_function(
             name="NotepadReadTool",
@@ -134,6 +146,7 @@ def build_modeler_tools(state: RuntimeState) -> list[StructuredTool]:
             func=lambda heading, content: append_notepad(state, heading, content),
             description="Append a durable markdown note to NOTEPAD.md. Args: heading, content.",
         ),
+        build_xlsx_read_tool(),
     ]
 
 
@@ -143,7 +156,7 @@ def build_coder_tools(state: RuntimeState, todos: list[dict[str, str]] | None = 
         StructuredTool.from_function(
             name="FileReadTool",
             func=lambda file_path, offset=0, limit=2000: read_file(state, file_path, offset, limit),
-            description="Read a UTF-8 text file inside the workspace. Supports offset and limit.",
+            description="Read a UTF-8 text file inside the workspace or the project root (e.g. assets/ algorithm library). Supports offset and limit. Writes stay workspace-only.",
         ),
         StructuredTool.from_function(
             name="FileWriteTool",
@@ -166,7 +179,7 @@ def build_coder_tools(state: RuntimeState, todos: list[dict[str, str]] | None = 
             func=lambda pattern, path=".", glob=None, head_limit=50, ignore_case=False: grep(
                 state, pattern, path, glob, head_limit, ignore_case
             ),
-            description="Search workspace text files by regex pattern and return matching lines.",
+            description="Search text files by regex pattern under the workspace or project root and return matching lines.",
         ),
         StructuredTool.from_function(
             name="BashTool",
@@ -195,6 +208,7 @@ def build_coder_tools(state: RuntimeState, todos: list[dict[str, str]] | None = 
             func=lambda: audit_figure_workspace(state.workspace),
             description="Deterministically audit solver scripts and PNG figures for CJK font setup, requested palette and image quality.",
         ),
+        build_xlsx_read_tool(),
     ] + [build_todo_update_tool(list(todos or []))]
 
 
@@ -230,4 +244,7 @@ def build_writer_tools(state: RuntimeState, todos: list[dict[str, str]] | None =
             ),
         )
     )
+    tools.append(build_pdf_read_tool())
+    tools.append(build_docx_read_tool())
+    tools.append(build_docx_convert_tool())
     return tools + [build_todo_update_tool(list(todos or []))]

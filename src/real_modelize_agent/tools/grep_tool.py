@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from real_modelize_agent.core.state import RuntimeState
-from real_modelize_agent.tools.file_tools import display_path, read_text_lossy, resolve_workspace_path
+from real_modelize_agent.tools.file_tools import display_path, read_text_lossy, resolve_read_path
 
 
 SKIP_DIRS = {".git", ".real-modelize", ".venv", "__pycache__", ".pytest_cache"}
@@ -42,7 +42,7 @@ def grep(
     if head_limit_value <= 0:
         return {"ok": False, "error": "head_limit must be > 0"}
 
-    root = resolve_workspace_path(state, path)
+    root = resolve_read_path(state, path)
     if root.is_file():
         candidates = [root]
     elif root.is_dir():

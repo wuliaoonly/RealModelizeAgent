@@ -47,9 +47,12 @@ DANGEROUS_PATTERNS = [
 def bash_tool_description() -> str:
     system = platform.system().lower()
     common = (
-        "Run one allowlisted executable without a shell, inside the workspace, with timeout and output capture. "
-        "Only relative workspace script/input paths are accepted. Shell operators, redirection, background jobs, "
-        "python -c/-m/stdin, package installation, and command composition are rejected. "
+        "Run one allowlisted executable without a shell, with timeout and output capture. "
+        "Python scripts may be .py entrypoints under the project root (e.g. assets/ scripts); reads may target "
+        "project-root files such as assets/, but writes outside the workspace are blocked by the runtime guard, "
+        "and writes inside the workspace still follow the coder whitelist (problemN/代码, utils, tmp). "
+        "Shell operators, redirection, background jobs, python -c/-m/stdin, package installation, and command "
+        "composition are rejected. "
         "Write a reviewable .py entrypoint under problemN/代码, utils, or tmp and run that file directly."
     )
     if system == "windows":
@@ -114,9 +117,9 @@ def _handle_tail_command(state: RuntimeState, command: str) -> dict[str, Any] | 
         return None
     count = int(match.group(1))
     raw_path = shlex.split(match.group(2), posix=False)[0]
-    from real_modelize_agent.tools.file_tools import read_text_lossy, resolve_workspace_path
+    from real_modelize_agent.tools.file_tools import read_text_lossy, resolve_read_path
 
-    path = resolve_workspace_path(state, raw_path)
+    path = resolve_read_path(state, raw_path)
     if not path.exists() or not path.is_file():
         return {"ok": False, "error": f"file does not exist: {raw_path}"}
     lines = read_text_lossy(path).splitlines()
@@ -173,7 +176,7 @@ def _safe_argv(state: RuntimeState, command: str) -> tuple[list[str] | None, str
         return None, f"executable is not allowlisted: {argv[0]}"
     if executable in {"python", "python.exe"}:
         if any(arg in {"-c", "-m", "-"} for arg in argv[1:]):
-            return None, "python -c/-m/stdin execution is not allowed; run a workspace .py entrypoint"
+            return None, "python -c/-m/stdin execution is not allowed; run a project-root .py entrypoint"
         unsupported_flags = [arg for arg in argv[1:] if arg.startswith("-") and arg != "--version"]
         if unsupported_flags:
             return None, f"python interpreter flags are not allowed: {', '.join(unsupported_flags)}"
@@ -181,9 +184,10 @@ def _safe_argv(state: RuntimeState, command: str) -> tuple[list[str] | None, str
         if non_flags and non_flags[0] not in {"--version"}:
             script = Path(non_flags[0])
             if script.suffix.lower() != ".py":
-                return None, "python must execute a .py workspace entrypoint"
+                return None, "python must execute a .py entrypoint"
+            script_path = script if script.is_absolute() else state.workspace / script
             try:
-                state.assert_workspace_path(state.workspace / script)
+                state.assert_readable_path(script_path)
             except ValueError as exc:
                 return None, str(exc)
     for arg in argv[1:]:
@@ -192,9 +196,9 @@ def _safe_argv(state: RuntimeState, command: str) -> tuple[list[str] | None, str
         candidate = Path(arg)
         if candidate.is_absolute():
             try:
-                state.assert_workspace_path(candidate)
+                state.assert_readable_path(candidate)
             except ValueError:
-                return None, f"absolute path outside workspace is not allowed: {arg}"
+                return None, f"absolute path outside readable root (workspace or project root) is not allowed: {arg}"
         if ".." in candidate.parts:
             return None, f"parent traversal is not allowed: {arg}"
     return argv, None
@@ -301,7 +305,13 @@ def _persist_python_execution_record(
     script_arg = next((arg for arg in argv[1:] if not arg.startswith("-") and arg.endswith(".py")), "")
     if not script_arg:
         return ""
-    script = state.assert_workspace_path(state.workspace / script_arg)
+    script = Path(script_arg)
+    if not script.is_absolute():
+        script = state.workspace / script
+    try:
+        state.assert_workspace_path(script)
+    except ValueError:
+        return ""  # 项目根下的外部脚本只记录失败信息，不写执行台账（台账限 workspace）
     if not script.is_file():
         return ""
     rel = script.relative_to(state.workspace).as_posix()

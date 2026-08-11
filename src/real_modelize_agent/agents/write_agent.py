@@ -17,6 +17,7 @@ from real_modelize_agent.prompts.write import WRITER_PROMPT, WRITER_PROMPT_SHORT
 from real_modelize_agent.providers.openai_provider import create_model
 from real_modelize_agent.tools.registry import build_writer_tools
 from real_modelize_agent.tools.latex_tool import latex_compile_status
+from real_modelize_agent.tools.skill_briefing import load_skill_briefing
 from real_modelize_agent.tools.todo_tool import persist_todos, update_todo
 
 Writer = Callable[[dict[str, Any]], None]
@@ -282,6 +283,13 @@ def _writer_input(state: RealModelizeGraphState, instruction: str, memory: dict[
         )
         parts.append("使用 PaperParagraphEditTool 精确修改后，必须 CompileLatexTool 编译两遍；不要重写其他段落。")
     parts.append("分层记忆快照:\n" + format_layered_memory_for_prompt(memory))
+    parts.append(
+        "[Word/PDF 技能]\n"
+        "PdfReadTool：只读提取 PDF 文本（检查 论文.pdf、阅读参考文献 PDF）。\n"
+        "DocxReadTool：只读提取 Word 文档文本。\n"
+        "DocxConvertTool：把 Markdown 等转成 Word 版论文交付（需要时用，主交付仍是 LaTeX→PDF）。\n"
+        + "\n".join(load_skill_briefing(name, max_chars=360) for name in ("pdf", "docx"))
+    )
     parts.append(
         "写作轮：面向全文按模板章节就地填充写作（摘要/一问题的提出和重述/二问题的分析/三模型假设/四符号说明/"
         "五数据的处理/六模型建立和求解(每问)/七模型的评价和改进/八模型的推广和应用/参考文献/附录），"
