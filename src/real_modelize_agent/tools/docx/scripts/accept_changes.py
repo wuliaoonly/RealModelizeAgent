@@ -7,7 +7,11 @@ import argparse
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+# office/ 已上移到 tools/ 共享，需把 tools/ 加回 sys.path 以按 namespace 包解析
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from office.soffice import get_soffice_env
 

@@ -26,11 +26,10 @@ description: 数学建模的论文撰写阶段。当进入"论文撰写"阶段�
 | 文档 | 用途 |
 |------|------|
 | `assets/write_agent/references/工作流程.md` | 论证构建流程、缺失输入处理、正式输出格式 |
-| `assets/write_agent/论文手/references/章节模板.md` | 各章节架构模式（摘要/引言/结果/讨论等） |
-| `assets/write_agent/论文手/references/写作规范.md` | 人称约束、叙述方式、去AI味写作指南 |
-| `assets/write_agent/论文手/references/自审框架.md` | 交付前四轮系统性自审（替代简单质检清单） |
-| `assets/write_agent/论文手/references/英文化工作流.md` | 美赛专用：中文→英文三阶段转换 |
-| `assets/write_agent/论文手/references/默认论文模板.md` | 标准论文模板（Markdown版），撰写时参考章节结构 |
+| `assets/write_agent/references/章节模板.md` | 各章节架构模式（摘要/引言/结果/讨论等） |
+| `assets/write_agent/references/写作规范.md` | 人称约束、叙述方式、去AI味写作指南 |
+| `assets/write_agent/references/自审框架.md` | 交付前四轮系统性自审（替代简单质检清单） |
+| `assets/write_agent/references/英文化工作流.md` | 美赛专用：中文→英文三阶段转换 |
 
 ---
 
@@ -44,7 +43,6 @@ description: 数学建模的论文撰写阶段。当进入"论文撰写"阶段�
 | `references/进阶技巧.md` | 提升写作质量时，包含段落流检查、动词校准（美赛专用） |
 | `references/自审框架.md` | 交付前系统性自审，四轮审查（论证逻辑→章节结构→表述质量→格式规范） |
 | `references/英文化工作流.md` | 美赛专用：中文→英文三阶段转换流程，含句式转换、动词校准、常见错误 |
-| `references/默认论文模板.md` | 标准论文模板（Markdown版），含完整章节结构和占位符说明 |
 
 ---
 
